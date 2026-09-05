@@ -1,215 +1,252 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import http from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
+import { createMcpHandler, createRuntimeMcpRunner, EditLaterRepository, normalizeToolResult, readJsonResponse } from '../src/server.mjs';
+import { createFlashcardService } from '../src/flashcards.mjs';
 
-import { createMcpHandler, EditLaterRepository } from '../src/server.mjs';
-
-function listen(server) {
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
-  });
+const copy = value => structuredClone(value);
+function fixture({text = ['Question'], back = ['Old answer'], type = 'forward', children = [], document = false} = {}) {
+  let rem = {remId:'testRem123', parentRemId:null, children, text, ...(back === undefined ? {} : {backText:back}), updatedAt:1};
+  const state = {isDocument:document, isFolder:false, isCardItem:false, enablePractice:true, practiceDirection:type};
+  const cards = back == null ? [] : [{cardId:'practiceCard123',remId:'testRem123',type}];
+  let queued = true;
+  let feedback = 'Too vague';
+  let queueTime = 1;
+  const writes=[];
+  const run = async (_, args) => {
+    const {operation} = args;
+    if (operation === 'find_many') return {rems: rem ? [copy(rem)] : [], total:rem ? 1 : 0};
+    if (!rem) throw new Error('Missing test Rem');
+    if (operation === 'get') return {rem:copy(rem)};
+    if (operation === 'state') return copy(state);
+    if (operation === 'cards') return {cards:copy(cards)};
+    if (operation === 'has_powerup') return {hasPowerup:queued};
+    writes.push(copy(args));
+    if (operation === 'set_text') rem.text=copy(args.richText);
+    else if (operation === 'set_back_text') rem.backText=copy(args.richText);
+    else if (operation === 'remove_powerup') queued=false;
+    else if (operation === 'remove') {rem=null; return {applied:true};}
+    else throw new Error(`Unexpected operation ${operation}`);
+    rem.updatedAt++;
+    return {applied:true};
+  };
+  const repository={get:()=> queued ? {feedback_rich_text:[feedback],added_at:queueTime} : null};
+  return {run,repository,writes,state,cards,get rem(){return rem;},get queued(){return queued;},
+    changeBack(value){rem.backText=[value];rem.updatedAt++;},changeFeedback(value){feedback=value;queueTime++;},
+    service:createFlashcardService(run,repository,'test-secret')};
+}
+async function route(handler,name,args,authorized=true) {
+  const body=JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}});
+  let result, status;
+  await handler({url:'/mcp',method:'POST',headers:{authorization:authorized?'Bearer test-secret':''},async *[Symbol.asyncIterator](){yield Buffer.from(body);}},
+    {writeHead(s){status=s;return this;},end(value){result=value?JSON.parse(value):null;}});
+  return {status,body:result};
 }
 
-function close(server) {
-  return new Promise((resolve) => server.close(resolve));
-}
-
-function createFixtureDatabase() {
-  const directory = mkdtempSync(path.join(os.tmpdir(), 'remnote-proxy-test-'));
-  const databasePath = path.join(directory, 'remnote.db');
-  const db = new DatabaseSync(databasePath);
-  db.exec('CREATE TABLE quanta (_id TEXT PRIMARY KEY NOT NULL, doc TEXT); CREATE TABLE cards (_id TEXT PRIMARY KEY NOT NULL, doc TEXT);');
-  const insertRem = db.prepare('INSERT INTO quanta (_id, doc) VALUES (?, ?)');
-  insertRem.run(
-    'queuedRem1',
-    JSON.stringify({
-      _id: 'queuedRem1',
-      key: ['Question'],
-      value: ['Answer'],
-      parent: 'parent1',
-      createdAt: Date.UTC(2026, 7, 31, 12),
-      apu: { e: { v: true } },
-      aph: { e_1: { v: [{ v: true, t: Date.UTC(2026, 7, 31, 13) }] } },
-      ps: { e_m: { v: { v: [{ text: 'Too vague', i: 'm' }] } } },
-    }),
-  );
-  insertRem.run(
-    'resolvedRem1',
-    JSON.stringify({
-      _id: 'resolvedRem1',
-      key: ['Resolved'],
-      apu: { e: { v: false } },
-    }),
-  );
-  db.prepare('INSERT INTO cards (_id, doc) VALUES (?, ?)').run(
-    'card1',
-    JSON.stringify({ _id: 'card1', rId: 'queuedRem1', c: 1, createdAt: Date.UTC(2026, 7, 31, 12) }),
-  );
-  db.close();
-  return databasePath;
-}
-
-async function rpc(url, token, body) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-    },
-    body: JSON.stringify(body),
-  });
-  return { status: response.status, body: await response.json() };
-}
-
-test('lists official and Edit Later tools and reads the real queue', async (t) => {
-  const token = 'test-token';
-  const databasePath = createFixtureDatabase();
-  const upstream = http.createServer(async (request, response) => {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    response.writeHead(200, { 'content-type': 'application/json' });
-    if (body.method === 'tools/list') {
-      response.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { tools: [{ name: 'search_docs' }] } }));
-      return;
-    }
-    if (body.method === 'tools/call' && body.params.name === 'read_docs_raw') {
-      response.end(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: body.id,
-          result: {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  ok: true,
-                  documents: [{ document_id: 'queuedRem1', title: 'Question', raw_document_text: 'Question >> Answer' }],
-                }),
-              },
-            ],
-          },
-        }),
-      );
-      return;
-    }
-    response.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: {} }));
-  });
-  const upstreamPort = await listen(upstream);
-  t.after(() => close(upstream));
-
-  const writes = [];
-  const proxy = http.createServer(
-    createMcpHandler({
-      expectedToken: token,
-      upstreamUrl: `http://127.0.0.1:${upstreamPort}/mcp`,
-      repository: new EditLaterRepository(databasePath),
-      runtimeMcpRunner: async (name, args) => {
-        writes.push({ name, args });
-        return { ok: true };
-      },
-      logger: { error() {} },
-    }),
-  );
-  const proxyPort = await listen(proxy);
-  t.after(() => close(proxy));
-  const url = `http://127.0.0.1:${proxyPort}/mcp`;
-
-  const listed = await rpc(url, token, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
-  assert.equal(listed.status, 200);
-  assert.deepEqual(
-    listed.body.result.tools.map((tool) => tool.name),
-    ['search_docs', 'get_edit_later_queue', 'update_rem', 'resolve_edit_later_item'],
-  );
-
-  const queue = await rpc(url, token, {
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/call',
-    params: { name: 'get_edit_later_queue', arguments: {} },
-  });
-  const result = queue.body.result.structuredContent;
-  assert.equal(result.count, 1);
-  assert.equal(result.items[0].rem_id, 'queuedRem1');
-  assert.equal(result.items[0].front, 'Question');
-  assert.equal(result.items[0].back, 'Answer');
-  assert.equal(result.items[0].feedback, 'Too vague');
-  assert.equal(result.items[0].cards[0].id, 'card1');
-  assert.equal(result.items[0].context.raw_document_text, 'Question >> Answer');
-  assert.deepEqual(writes, []);
+test('updates only the back, preserving front, literal arrows, direction and card IDs', async()=>{
+  const f=fixture({type:'backward'});
+  const before=await f.service.read('testRem123');
+  const result=await f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'Factors → effects ↔ risks ― literal'},'flashcard');
+  assert.equal(result.card.front,'Question');
+  assert.equal(result.card.back,'Factors → effects ↔ risks ― literal');
+  assert.equal(result.card.practice_direction,'backward');
+  assert.deepEqual(result.card.cards,before.cards);
+  assert.deepEqual(f.writes.map(w=>w.operation),['set_back_text']);
+  assert.equal(result.verified,true);
 });
 
-test('rejects unauthenticated requests and validates resolution against the live queue', async (t) => {
-  const token = 'test-token';
-  const databasePath = createFixtureDatabase();
-  const writes = [];
-  const proxy = http.createServer(
-    createMcpHandler({
-      expectedToken: token,
-      upstreamUrl: 'http://127.0.0.1:1/mcp',
-      repository: new EditLaterRepository(databasePath),
-      runtimeMcpRunner: async (name, args) => {
-        writes.push({ name, args });
-        return { ok: true };
-      },
-      logger: { error() {} },
-    }),
-  );
-  const port = await listen(proxy);
-  t.after(() => close(proxy));
-  const url = `http://127.0.0.1:${port}/mcp`;
+test('updates both sides separately and resolves only with the verified result', async()=>{
+  const f=fixture(); const before=await f.service.read('testRem123');
+  const result=await f.service.update({rem_id:before.rem_id,expected_revision:before.revision,front:'New question',back:'New answer'},'flashcard');
+  assert.deepEqual(f.rem.text,['New question']); assert.deepEqual(f.rem.backText,['New answer']);
+  await assert.rejects(()=>f.service.resolve({id:before.rem_id}),/required/);
+  const resolved=await f.service.resolve({id:before.rem_id,verification_token:result.verification_token});
+  assert.equal(resolved.verified,true); assert.equal(f.queued,false);
+});
 
-  const unauthorized = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
-  });
-  assert.equal(unauthorized.status, 401);
+test('stale revisions reject edits before writes',async()=>{
+  const f=fixture(); const before=await f.service.read('testRem123'); f.changeBack('User edited meanwhile');
+  await assert.rejects(()=>f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'Overwrite'},'flashcard'),/Revision conflict/);
+  assert.equal(f.writes.length,0);
+});
 
-  const missing = await rpc(url, token, {
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/call',
-    params: { name: 'resolve_edit_later_item', arguments: { id: 'resolvedRem1' } },
-  });
-  assert.equal(missing.body.error.code, -32000);
-  assert.deepEqual(writes, []);
+test('serializes competing proxy edits to the same Rem',async()=>{
+  const f=fixture(); const before=await f.service.read('testRem123');
+  const results=await Promise.allSettled(['First','Second'].map(back=>f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back},'flashcard')));
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(f.writes.length,1);
+});
 
-  const updated = await rpc(url, token, {
-    jsonrpc: '2.0',
-    id: 3,
-    method: 'tools/call',
-    params: { name: 'update_rem', arguments: { id: 'queuedRem1', text: 'Updated question' } },
-  });
-  assert.equal(updated.body.result.structuredContent.ok, true);
-  assert.deepEqual(writes[0], {
-    name: 'remnote_rem',
-    args: {
-      operation: 'set_text',
-      remId: 'queuedRem1',
-      richText: ['Updated question'],
-    },
-  });
+test('rejects flattening rich text but preserves its formatting and references in a structured edit',async()=>{
+  const rich=[{i:'m',text:'Old',b:true},{i:'q',_id:'referencedRem'}];
+  const f=fixture({back:rich}); const before=await f.service.read('testRem123');
+  await assert.rejects(()=>f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'New'},'flashcard'),/structured rich text/);
+  await assert.rejects(()=>f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back_rich_text:['New']},'flashcard'),/preserve/);
+  const changed=[{i:'m',text:'New',b:true},{i:'q',_id:'referencedRem'}];
+  const result=await f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back_rich_text:changed},'flashcard');
+  assert.deepEqual(result.card.back_rich_text,changed);
+});
 
-  const resolved = await rpc(url, token, {
-    jsonrpc: '2.0',
-    id: 4,
-    method: 'tools/call',
-    params: { name: 'resolve_edit_later_item', arguments: { id: 'queuedRem1' } },
-  });
-  assert.equal(resolved.body.result.structuredContent.ok, true);
-  assert.deepEqual(writes[1], {
-    name: 'remnote_rem',
-    args: {
-      operation: 'remove_powerup',
-      remId: 'queuedRem1',
-      powerupCode: 'e',
-    },
-  });
+test('refuses cloze and multiline card types, even through the front updater',async()=>{
+  for (const type of ['cloze','multiline']) {
+    const f=fixture({type}); const before=await f.service.read('testRem123');
+    await assert.rejects(()=>f.service.update({rem_id:before.rem_id,expected_revision:before.revision,front:'New'},'front'),/Only basic/);
+    assert.equal(f.writes.length,0);
+  }
+});
+
+test('legacy updater cannot concatenate new question and answer onto an existing card',async()=>{
+  const f=fixture();const before=await f.service.read('testRem123');
+  await assert.rejects(()=>f.service.update({rem_id:before.rem_id,expected_revision:before.revision,front:'Question → new answer'},'legacy'),/cannot update flashcards/);
+  assert.equal(f.writes.length,0);
+});
+
+test('plain Rem updater preserves the absence of a back',async()=>{
+  const f=fixture({back:null});f.rem.backText=undefined;
+  const before=await f.service.read('testRem123');
+  const result=await f.service.update({rem_id:before.rem_id,expected_revision:before.revision,front:'Updated note'},'front');
+  assert.equal(result.card.has_back,false);assert.equal(result.card.front,'Updated note');
+});
+
+test('no-op retains rich text and issues no correction receipt',async()=>{
+  const f=fixture({text:[{i:'m',text:'Question',b:true}]});const before=await f.service.read('testRem123');
+  const result=await f.service.update({rem_id:before.rem_id,expected_revision:before.revision,front:'Question'},'flashcard');
+  assert.equal(result.changed,false); assert.equal(result.verification_token,undefined);assert.equal(f.writes.length,0);
+});
+
+test('rejects forged receipts, changed card content, and changed feedback',async()=>{
+  for (const mutation of ['forged','content','feedback']) {
+    const f=fixture(); const before=await f.service.read('testRem123');
+    const result=await f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'New answer'},'flashcard');
+    let token=result.verification_token;
+    if(mutation==='forged') token=token.slice(0,-1)+(token.endsWith('0')?'1':'0');
+    if(mutation==='content') f.changeBack('New user edit');
+    if(mutation==='feedback') f.changeFeedback('New feedback');
+    await assert.rejects(()=>f.service.resolve({id:before.rem_id,verification_token:token}));
+    assert.equal(f.queued,true);assert.equal(f.writes.some(w=>w.operation==='remove_powerup'),false);
+  }
+});
+
+test('signed correction receipt remains usable after proxy restart',async()=>{
+  const f=fixture();const before=await f.service.read('testRem123');
+  const result=await f.service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'New'},'flashcard');
+  const restarted=createFlashcardService(f.run,f.repository,'test-secret');
+  assert.equal((await restarted.resolve({id:before.rem_id,verification_token:result.verification_token})).verified,true);
+});
+
+test('partial two-side write failure does not clear Edit Later, hide the partial result or retry',async()=>{
+  const f=fixture();
+  const service=createFlashcardService((name,args)=>args.operation==='set_back_text'?Promise.reject(new Error('Lost connection')):f.run(name,args),f.repository,'test-secret');
+  const before=await service.read('testRem123');
+  await assert.rejects(()=>service.update({rem_id:before.rem_id,expected_revision:before.revision,front:'New front',back:'New back'},'flashcard'),/one or both sides may have changed/);
+  assert.deepEqual(f.rem.text,['New front']);assert.deepEqual(f.rem.backText,['Old answer']);assert.equal(f.queued,true);
+});
+
+test('false acknowledgement and mismatched readback never report success',async()=>{
+  for(const failure of ['false','no-write','other-side']) {
+    const f=fixture();
+    const service=createFlashcardService(async(name,args)=>{
+      if(args.operation==='set_back_text') {
+        if(failure==='false') return {applied:false};
+        if(failure==='no-write') return {applied:true};
+        const result=await f.run(name,args); f.rem.text=['Unexpected front']; return result;
+      }
+      return f.run(name,args);
+    },f.repository,'test-secret');
+    const before=await service.read('testRem123');
+    await assert.rejects(()=>service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'New'},'flashcard'),/could not be fully verified/);
+    assert.equal(f.queued,true);
+  }
+});
+
+test('deletion refuses documents, folders, unknown states and parents by default',async()=>{
+  for(const target of ['document','folder','unknown','text-only','parent']) {
+    const f=fixture({children:target==='parent'?['childRem123']:[]});
+    if(target==='document') f.state.isDocument=true;
+    if(target==='folder') f.state.isFolder=true;
+    const safe=await f.service.read('testRem123');
+    if(target==='unknown') delete f.state.isDocument;
+    const service=target==='text-only'?createFlashcardService((name,args)=>args.operation==='state'?{content:[{type:'text',text:'{"isDocument":true}'}]}:f.run(name,args),f.repository,'test-secret'):f.service;
+    await assert.rejects(()=>service.remove({rem_id:safe.rem_id,expected_revision:safe.revision}));
+    assert.equal(f.writes.length,0);
+  }
+});
+
+test('deletes a verified leaf and confirms absence; explicit subtree deletion works',async()=>{
+  for(const children of [[],['childRem123']]) {
+    const f=fixture({children});const before=await f.service.read('testRem123');
+    const result=await f.service.remove({rem_id:before.rem_id,expected_revision:before.revision,...(children.length?{allow_descendants:true}:{})});
+    assert.equal(result.verified,true);assert.equal(f.rem,null);
+  }
+});
+
+test('missing deletion confirmation never becomes a verified deletion',async()=>{
+  const f=fixture();const before=await f.service.read('testRem123');
+  const service=createFlashcardService((name,args)=>args.operation==='find_many'?{rems:[]}:f.run(name,args),f.repository,'test-secret');
+  await assert.rejects(()=>service.remove({rem_id:before.rem_id,expected_revision:before.revision}),/absence could not be verified/);
+});
+
+test('handler authenticates and strictly rejects extra fields and missing revisions',async()=>{
+  const f=fixture();const handler=createMcpHandler({expectedToken:'test-secret',repository:f.repository,runtimeMcpRunner:f.run,logger:{error(){}}});
+  assert.equal((await route(handler,'read_flashcard',{rem_id:'testRem123'},false)).status,401);
+  const before=(await route(handler,'read_flashcard',{rem_id:'testRem123'})).body.result.structuredContent;
+  assert.match(before.revision,/^[a-f0-9]{64}$/);
+  for(const args of [{id:'testRem123',text:'Front',back:'New answer',expected_revision:before.revision},{id:'testRem123',text:'Front'}]) {
+    assert.equal((await route(handler,'update_rem',args)).body.error.code,-32602);
+  }
+  assert.equal(f.writes.length,0);
+});
+
+function databaseFixture(t,count) {
+  const dir=mkdtempSync(path.join(os.tmpdir(),'remnote-proxy-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=path.join(dir,'fixture.db');const db=new DatabaseSync(file);
+  db.exec('CREATE TABLE quanta (_id TEXT PRIMARY KEY,doc TEXT);CREATE TABLE cards (_id TEXT PRIMARY KEY,doc TEXT)');
+  const insert=db.prepare('INSERT INTO quanta VALUES (?,?)');
+  for(let i=0;i<count;i++) insert.run(`testRem${String(i).padStart(3,'0')}`,JSON.stringify({key:['Question'],value:['Answer'],createdAt:1,apu:{e:{v:true}},aph:{e_1:{v:[{v:true,t:2}]}}}));
+  db.close();return {file,repository:new EditLaterRepository(file)};
+}
+test('queue paginates 101 items and does not skip after resolved items disappear',async t=>{
+  const {file,repository}=databaseFixture(t,101);const first=repository.listPage(100);
+  assert.equal(first.total,101);assert.equal(first.items.length,100);assert.equal(first.has_more,true);
+  const db=new DatabaseSync(file);db.prepare('DELETE FROM quanta WHERE _id = ?').run(first.items[0].rem_id);db.close();
+  const second=repository.listPage(100,first.next_cursor);
+  assert.equal(second.items.length,1);assert.equal(second.items[0].rem_id,'testRem100');assert.equal(second.has_more,false);assert.equal(second.total,100);
+  assert.throws(()=>repository.listPage(100,'not-a-cursor'),/Invalid queue cursor/);
+});
+test('queue handler returns totals and validates parameters',async t=>{
+  const {repository}=databaseFixture(t,2);
+  const handler=createMcpHandler({expectedToken:'test-secret',repository,runtimeMcpRunner:async()=>{},logger:{error(){}}});
+  const result=(await route(handler,'get_edit_later_queue',{limit:1,include_context:false})).body.result.structuredContent;
+  assert.equal(result.total,2);assert.equal(result.count,1);assert.equal(result.has_more,true);
+  assert.equal((await route(handler,'get_edit_later_queue',{limit:1.5})).body.error.code,-32602);
+});
+
+test('normalizes text-only JSON but rejects empty, ambiguous and failed runtime results',()=>{
+  assert.deepEqual(normalizeToolResult({content:[{type:'text',text:'{"isDocument":true}'}]}),{isDocument:true});
+  for(const result of [undefined,{content:[]},{content:[{type:'text',text:'not-json'}]},{structuredContent:{applied:false}},{structuredContent:{ok:false}}]) assert.throws(()=>normalizeToolResult(result));
+});
+test('SSE parser skips progress, supports multiline data and returns without waiting for stream closure',async()=>{
+  const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('data: {"method":"notifications/progress"}\r\n\r\nevent: message\r\ndata: {"id":"wanted",\r\ndata: "result":{"ok":true}}\r\n\r\n'));}});
+  const result=await readJsonResponse(new Response(stream,{headers:{'content-type':'text/event-stream'}}),'wanted');
+  assert.equal(result.result.ok,true);
+});
+test('parser rejects empty and mismatched RPC replies',async()=>{
+  await assert.rejects(()=>readJsonResponse(new Response(''),'id'),/empty/);
+  await assert.rejects(()=>readJsonResponse(Response.json({id:'other',result:{}}),'id'),/mismatch/);
+});
+test('runtime runner normalizes text-only payloads and closes the session',async()=>{
+  const methods=[];
+  const run=createRuntimeMcpRunner({token:'fake',fetchImpl:async(_,options)=>{
+    methods.push(options.method);
+    if(options.method==='DELETE') return new Response(null,{status:204});
+    const request=JSON.parse(options.body);
+    if(request.method==='initialize') return Response.json({id:'proxy-init',result:{}},{headers:{'mcp-session-id':'test-session'}});
+    if(request.method==='notifications/initialized') return new Response(null,{status:202});
+    return Response.json({id:'proxy-call',result:{content:[{type:'text',text:'{"isDocument":true}'}]}});
+  }});
+  assert.deepEqual(await run('remnote_rem',{operation:'state',remId:'testRem123'}),{isDocument:true});
+  assert.equal(methods.at(-1),'DELETE');
 });

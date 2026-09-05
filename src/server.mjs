@@ -4,16 +4,16 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { FLASHCARD_TOOLS, createFlashcardService, strictArgs } from './flashcards.mjs';
 
 const EDIT_LATER_CODE = 'e';
 const EDIT_LATER_MESSAGE_SLOT = 'e_m';
-const MAX_TEXT_LENGTH = 50_000;
 
 const EXTRA_TOOLS = [
   {
     name: 'get_edit_later_queue',
     description:
-      'List the actual RemNote Edit Later flashcard queue, including Rem/card IDs, front/back text, attached feedback, queue timestamp, and document context.',
+      'List Edit Later with explicit total, has_more and next_cursor. Stored front/back and raw card codes are not the rendered practice sides. Always call read_flashcard before editing to obtain live direction, rich text and revision. Follow next_cursor until has_more is false; restarting without a cursor returns the first page.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -25,10 +25,11 @@ const EXTRA_TOOLS = [
           default: 100,
           description: 'Maximum number of active Edit Later items to return.',
         },
+        cursor: { type: 'string', maxLength: 1024, description: 'Opaque next_cursor from the previous page. Do not modify. Pages use a stable queue-time and Rem-ID order.' },
         include_context: {
           type: 'boolean',
           default: true,
-          description: 'Include the document hierarchy and raw Rem tree from the official RemNote MCP.',
+          description: 'Include surrounding raw Rem context from the official RemNote MCP when available.',
         },
       },
     },
@@ -39,78 +40,7 @@ const EXTRA_TOOLS = [
       openWorldHint: false,
     },
   },
-  {
-    name: 'update_rem',
-    description:
-      'Replace the front/text of an existing Rem through the RemNote plugin SDK. This never writes directly to remnote.db.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'string', minLength: 1, description: 'The Rem ID to update.' },
-        text: {
-          type: 'string',
-          maxLength: MAX_TEXT_LENGTH,
-          description: 'The replacement front/text for the Rem.',
-        },
-      },
-      required: ['id', 'text'],
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: 'resolve_edit_later_item',
-    description:
-      'Remove a Rem from the real Edit Later queue through the authenticated RemNote Agent Bridge plugin SDK.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: {
-          type: 'string',
-          minLength: 1,
-          description: 'The queued Rem ID returned by get_edit_later_queue.',
-        },
-      },
-      required: ['id'],
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: 'delete_rem',
-    description:
-      'Permanently delete one non-document Rem by stable Rem ID through the RemNote plugin SDK. Refuses document Rems; use delete_doc for whole documents. Deleting a parent Rem also deletes its descendant subtree according to RemNote semantics.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        rem_id: {
-          type: 'string',
-          minLength: 3,
-          maxLength: 128,
-          pattern: '^[A-Za-z0-9_-]+$',
-          description: 'The exact stable ID of the non-document Rem to delete.',
-        },
-      },
-      required: ['rem_id'],
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-  },
+  ...FLASHCARD_TOOLS,
 ];
 
 function asBoolean(value) {
@@ -168,6 +98,7 @@ function normalizeQueueItem(row, cards) {
     feedback_rich_text: Array.isArray(feedbackRichText) ? feedbackRichText : [],
     added_at: Number.isFinite(addedAt) ? new Date(addedAt).toISOString() : null,
     cards,
+    field_semantics: 'Stored Rem sides, not rendered practice sides. Read read_flashcard for live direction and revision before editing.',
   };
 }
 
@@ -185,31 +116,44 @@ export class EditLaterRepository {
     }
   }
 
-  list(limit = 100) {
-    return this.withDatabase((db) => {
-      const rows = db
-        .prepare(
-          `SELECT _id, doc
-             FROM quanta
-            WHERE json_extract(doc, '$.apu.e.v') = 1
-            ORDER BY COALESCE(
+  list(limit = 100) { return this.listPage(limit).items; }
+
+  get(id) {
+    return this.withDatabase(db => {
+      const row = db.prepare("SELECT _id, doc FROM quanta WHERE _id = ? AND json_extract(doc, '$.apu.e.v') = 1").get(id);
+      return row ? normalizeQueueItem(row, []) : null;
+    });
+  }
+
+  listPage(limit = 100, cursor) {
+    let after = null;
+    if (cursor !== undefined) {
+      try { after = JSON.parse(Buffer.from(cursor, 'base64url').toString()); } catch { throw new TypeError('Invalid queue cursor.'); }
+      if (!after || !Number.isFinite(after.time) || !validateId(after.id)) throw new TypeError('Invalid queue cursor.');
+    }
+    return this.withDatabase(db => {
+      db.exec('BEGIN');
+      try {
+        const total = db.prepare("SELECT COUNT(*) AS count FROM quanta WHERE json_extract(doc, '$.apu.e.v') = 1").get().count;
+        const rows = db.prepare(`
+          WITH queue AS (
+            SELECT _id, doc, COALESCE(
               (SELECT MAX(CAST(json_extract(event.value, '$.t') AS INTEGER))
-                 FROM json_each(doc, '$.aph') AS history,
-                      json_each(history.value, '$.v') AS event
-                WHERE history.key LIKE 'e_%'
-                  AND json_extract(event.value, '$.v') = 1),
-              json_extract(doc, '$.createdAt')
-            ) ASC
-            LIMIT ?`,
-        )
-        .all(limit);
-      const cardStatement = db.prepare(
-        `SELECT _id, doc FROM cards WHERE json_extract(doc, '$.rId') = ? ORDER BY _id`,
-      );
-      return rows.map((row) => {
-        const cards = cardStatement.all(row._id).map(normalizeCard);
-        return normalizeQueueItem(row, cards);
-      });
+               FROM json_each(doc, '$.aph') AS history, json_each(history.value, '$.v') AS event
+               WHERE substr(history.key, 1, 2) = 'e_' AND json_extract(event.value, '$.v') = 1),
+              json_extract(doc, '$.createdAt'), 0) AS queued_at
+            FROM quanta WHERE json_extract(doc, '$.apu.e.v') = 1
+          )
+          SELECT * FROM queue WHERE (? IS NULL OR queued_at > ? OR (queued_at = ? AND _id > ?))
+          ORDER BY queued_at ASC, _id ASC LIMIT ?
+        `).all(after?.time ?? null, after?.time ?? null, after?.time ?? null, after?.id ?? null, limit + 1);
+        const hasMore = rows.length > limit;
+        const pageRows = rows.slice(0, limit);
+        const cardStatement = db.prepare("SELECT _id, doc FROM cards WHERE json_extract(doc, '$.rId') = ? ORDER BY _id");
+        const items = pageRows.map(row => normalizeQueueItem(row, cardStatement.all(row._id).map(normalizeCard)));
+        const last = pageRows.at(-1);
+        return { items, total, has_more: hasMore, next_cursor: hasMore ? Buffer.from(JSON.stringify({ time: last.queued_at, id: last._id })).toString('base64url') : null };
+      } finally { db.exec('COMMIT'); }
     });
   }
 
@@ -265,18 +209,12 @@ async function parseJsonBody(request) {
 async function callUpstream(upstreamUrl, authorization, rpcRequest) {
   const response = await fetch(upstreamUrl, {
     method: 'POST',
-    headers: {
-      authorization,
-      accept: 'application/json, text/event-stream',
-      'content-type': 'application/json',
-    },
+    signal: AbortSignal.timeout(30_000),
+    headers: { authorization, accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
     body: JSON.stringify(rpcRequest),
   });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(`Official RemNote MCP returned HTTP ${response.status}`);
-  }
-  return body ? JSON.parse(body) : null;
+  if (!response.ok) throw new Error(`Official RemNote MCP returned HTTP ${response.status}`);
+  return readJsonResponse(response, rpcRequest?.id);
 }
 
 async function loadContext(upstreamUrl, authorization, items) {
@@ -290,24 +228,61 @@ async function loadContext(upstreamUrl, authorization, items) {
       arguments: { ids: items.map((item) => item.rem_id) },
     },
   });
-  const text = response?.result?.content?.find((entry) => entry.type === 'text')?.text;
-  if (!text) return new Map();
-  const parsed = JSON.parse(text);
+  if (response?.error || response?.result?.isError) throw new Error('Official RemNote MCP could not load context.');
+  const parsed = normalizeToolResult(response?.result);
+  if (!Array.isArray(parsed?.documents)) throw new Error('Official RemNote MCP returned no document context.');
   return new Map((parsed.documents ?? []).map((document) => [document.document_id, document]));
 }
 
-async function readJsonResponse(response) {
-  const body = await response.text();
-  if (!body) return null;
-  if ((response.headers.get('content-type') ?? '').includes('text/event-stream')) {
-    const data = body
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice('data:'.length).trim())
-      .find(Boolean);
-    return data ? JSON.parse(data) : null;
+export function normalizeToolResult(result) {
+  if (!result || typeof result !== 'object' || result.isError) throw new Error('MCP returned an error or missing tool result.');
+  let payload = result.structuredContent;
+  if (payload === undefined) {
+    const texts = result.content?.filter(entry => entry.type === 'text') ?? [];
+    if (texts.length !== 1) throw new Error('MCP returned an ambiguous or missing JSON payload.');
+    try { payload = JSON.parse(texts[0].text); } catch { throw new Error('MCP tool result was not JSON.'); }
   }
-  return JSON.parse(body);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.ok === false || payload.applied === false) throw new Error('MCP tool did not report a successful structured result.');
+  return payload;
+}
+
+export async function readJsonResponse(response, expectedId) {
+  if (!(response.headers.get('content-type') ?? '').includes('text/event-stream')) {
+    const body = await response.text();
+    if (!body) { if (expectedId === undefined) return null; throw new Error('MCP response was empty.'); }
+    const parsed = JSON.parse(body);
+    if (expectedId !== undefined && parsed.id !== expectedId) throw new Error('MCP response ID mismatch.');
+    return parsed;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let size = 0;
+  function event(block) {
+    const data = block.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+    if (!data) return null;
+    const parsed = JSON.parse(data);
+    return Object.hasOwn(parsed, 'id') && (expectedId === undefined || parsed.id === expectedId) ? parsed : null;
+  }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) { size += value.length; if (size > 10_000_000) throw new Error('MCP response too large.'); }
+      buffer += decoder.decode(value, { stream: !done });
+      let match;
+      while ((match = /\r?\n\r?\n/.exec(buffer))) {
+        const block = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        const parsed = event(block);
+        if (parsed) return parsed;
+      }
+      if (done) {
+        const parsed = event(buffer);
+        if (parsed) return parsed;
+        throw new Error('MCP stream ended without the matching response.');
+      }
+    }
+  } finally { await reader.cancel().catch(() => {}); }
 }
 
 export function createRuntimeMcpRunner({
@@ -325,6 +300,7 @@ export function createRuntimeMcpRunner({
   return async (toolName, args) => {
     const initializeResponse = await fetchImpl(runtimeUrl, {
       method: 'POST',
+      signal: AbortSignal.timeout(30_000),
       headers,
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -333,11 +309,11 @@ export function createRuntimeMcpRunner({
         params: {
           protocolVersion: '2025-11-25',
           capabilities: {},
-          clientInfo: { name: 'remnote-edit-later-proxy', version: '0.2.0' },
+          clientInfo: { name: 'remnote-edit-later-proxy', version: '0.3.0' },
         },
       }),
     });
-    const initializeBody = await readJsonResponse(initializeResponse);
+    const initializeBody = await readJsonResponse(initializeResponse, 'proxy-init');
     if (!initializeResponse.ok || initializeBody?.error) {
       throw new Error(
         initializeBody?.error?.message ??
@@ -351,6 +327,7 @@ export function createRuntimeMcpRunner({
     try {
       const initializedResponse = await fetchImpl(runtimeUrl, {
         method: 'POST',
+        signal: AbortSignal.timeout(30_000),
         headers: sessionHeaders,
         body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
       });
@@ -362,6 +339,7 @@ export function createRuntimeMcpRunner({
 
       const callResponse = await fetchImpl(runtimeUrl, {
         method: 'POST',
+        signal: AbortSignal.timeout(30_000),
         headers: sessionHeaders,
         body: JSON.stringify({
           jsonrpc: '2.0',
@@ -370,7 +348,7 @@ export function createRuntimeMcpRunner({
           params: { name: toolName, arguments: args },
         }),
       });
-      const callBody = await readJsonResponse(callResponse);
+      const callBody = await readJsonResponse(callResponse, 'proxy-call');
       if (!callResponse.ok || callBody?.error) {
         throw new Error(
           callBody?.error?.message ??
@@ -381,10 +359,11 @@ export function createRuntimeMcpRunner({
         const message = callBody.result.content?.find((entry) => entry.type === 'text')?.text;
         throw new Error(message ?? 'RemNote Agent Runtime tool call failed');
       }
-      return callBody?.result?.structuredContent ?? callBody?.result;
+      return normalizeToolResult(callBody?.result);
     } finally {
       await fetchImpl(runtimeUrl, {
         method: 'DELETE',
+        signal: AbortSignal.timeout(5_000),
         headers: sessionHeaders,
       }).catch(() => {});
     }
@@ -402,6 +381,7 @@ export function createMcpHandler({
   runtimeMcpRunner,
   logger = console,
 }) {
+  const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken);
   return async function handler(request, response) {
     if (request.url !== '/mcp') {
       response.writeHead(404).end('Not found');
@@ -432,8 +412,9 @@ export function createMcpHandler({
     try {
       if (rpcRequest?.method === 'tools/list') {
         const upstream = await callUpstream(upstreamUrl, authorization, rpcRequest);
-        upstream.result = upstream.result ?? {};
-        upstream.result.tools = [...(upstream.result.tools ?? []), ...EXTRA_TOOLS];
+        if (upstream?.error || !Array.isArray(upstream?.result?.tools)) throw new Error('Official tool catalog was unavailable.');
+        const customNames = new Set(EXTRA_TOOLS.map(tool => tool.name));
+        upstream.result.tools = [...upstream.result.tools.filter(tool => !customNames.has(tool.name)), ...EXTRA_TOOLS];
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify(upstream));
         return;
@@ -444,23 +425,26 @@ export function createMcpHandler({
         const args = rpcRequest?.params?.arguments ?? {};
 
         if (name === 'get_edit_later_queue') {
-          const limit = Number.isInteger(args.limit) ? args.limit : 100;
-          if (limit < 1 || limit > 100 || (args.include_context !== undefined && typeof args.include_context !== 'boolean')) {
+          strictArgs(args, ['limit', 'include_context', 'cursor']);
+          const limit = args.limit ?? 100;
+          if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (args.cursor !== undefined && (typeof args.cursor !== 'string' || args.cursor.length > 1024)) || (args.include_context !== undefined && typeof args.include_context !== 'boolean')) {
             throw new TypeError('Invalid get_edit_later_queue arguments');
           }
-          const items = repository.list(limit);
+          const page = repository.listPage(limit, args.cursor);
+          const items = page.items;
           let contextError = null;
           if (args.include_context !== false) {
             try {
               const contexts = await loadContext(upstreamUrl, authorization, items);
               for (const item of items) item.context = contexts.get(item.rem_id) ?? null;
+              if (items.some(item => item.context === null)) contextError = 'Context was unavailable for some Rems. Use read_flashcard and read_docs_raw before editing.';
             } catch (error) {
               contextError = error.message;
             }
           }
           const payload = {
+            ...page,
             count: items.length,
-            items,
             ...(contextError ? { context_warning: contextError } : {}),
           };
           response.writeHead(200, { 'content-type': 'application/json' });
@@ -468,58 +452,28 @@ export function createMcpHandler({
           return;
         }
 
-        if (name === 'update_rem') {
-          if (!validateId(args.id) || typeof args.text !== 'string' || args.text.length > MAX_TEXT_LENGTH) {
-            throw new TypeError('Invalid update_rem arguments');
-          }
-          const operation = await runtimeMcpRunner('remnote_rem', {
-            operation: 'set_text',
-            remId: args.id,
-            richText: [args.text],
-          });
-          const payload = { ok: true, rem_id: args.id, operation };
+        let payload;
+        if (name === 'read_flashcard') {
+          strictArgs(args, ['rem_id'], ['rem_id']);
+          payload = await flashcards.read(args.rem_id);
+        } else if (name === 'update_flashcard') {
+          payload = await flashcards.update(args, 'flashcard');
+        } else if (name === 'update_rem_front') {
+          payload = await flashcards.update(args, 'front');
+        } else if (name === 'update_rem') {
+          strictArgs(args, ['id', 'text', 'expected_revision'], ['id', 'text', 'expected_revision']);
+          payload = await flashcards.update({ rem_id: args.id, front: args.text, expected_revision: args.expected_revision }, 'legacy');
+        } else if (name === 'resolve_edit_later_item') {
+          payload = await flashcards.resolve(args);
+        } else if (name === 'delete_rem') {
+          payload = await flashcards.remove(args);
+        }
+        if (payload !== undefined) {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ jsonrpc: '2.0', id: rpcRequest.id, result: toolResult(payload) }));
           return;
         }
 
-        if (name === 'resolve_edit_later_item') {
-          if (!validateId(args.id)) throw new TypeError('Invalid resolve_edit_later_item arguments');
-          if (!repository.isActive(args.id)) {
-            throw new Error(`Rem ${args.id} is not currently in the Edit Later queue`);
-          }
-          const operation = await runtimeMcpRunner('remnote_rem', {
-            operation: 'remove_powerup',
-            remId: args.id,
-            powerupCode: EDIT_LATER_CODE,
-          });
-          const payload = { ok: true, rem_id: args.id, operation };
-          response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ jsonrpc: '2.0', id: rpcRequest.id, result: toolResult(payload) }));
-          return;
-        }
-
-        if (name === 'delete_rem') {
-          const keys = args && typeof args === 'object' && !Array.isArray(args) ? Object.keys(args) : [];
-          if (keys.length !== 1 || keys[0] !== 'rem_id' || !validateId(args.rem_id)) {
-            throw new TypeError('delete_rem requires exactly one valid rem_id');
-          }
-          const state = await runtimeMcpRunner('remnote_rem', {
-            operation: 'state',
-            remId: args.rem_id,
-          });
-          if (state?.isDocument) {
-            throw new Error('delete_rem refuses to delete document Rems; use delete_doc for whole documents');
-          }
-          const operation = await runtimeMcpRunner('remnote_rem', {
-            operation: 'remove',
-            remId: args.rem_id,
-          });
-          const payload = { ok: true, deleted: true, rem_id: args.rem_id, operation };
-          response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ jsonrpc: '2.0', id: rpcRequest.id, result: toolResult(payload) }));
-          return;
-        }
       }
 
       const upstream = await callUpstream(upstreamUrl, authorization, rpcRequest);
