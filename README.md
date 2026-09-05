@@ -38,9 +38,9 @@ The proxy reads authentication from the RemNote config and runtime auth files un
 
 ## Git and deployment
 
-Local source checkout: `/home/remnote/remnote/remnote-mcp-proxy`. The `AGENTS.md` in that repository requires completed changes and deployment checkpoints to be committed.
+The files in `deploy/` are configuration examples. Replace their paths, knowledge-base identifier, tunnel identifier and domain names with your own settings before use. The Cloudflare example is optional; use the transport appropriate to your installation. This repository does not install RemNote Desktop or the Agent Runtime.
 
-Server: Example server (`192.0.2.10`), `/opt/remnote-mcp-proxy`, owned by `remnote`; service `remnote-mcp-proxy.service`.
+The rollback commands below assume a server checkout at `/opt/remnote-mcp-proxy`, owned by `remnote`, with a `remnote-mcp-proxy.service` service. Adjust these examples to your deployment. `AGENTS.md` requires completed changes and deployment checkpoints to be committed.
 
 The deployed original is committed and tagged `before-flashcard-safety`. Commit every completed change before deployment. Keep the working tree clean and run tests before restarting the proxy. Refresh the ChatGPT RemNote plugin's tool catalog after schema changes, then start a fresh conversation.
 
@@ -62,3 +62,7 @@ Use a new rollback branch name if that name already exists. Refresh ChatGPT's to
 - These labels use a read-only snapshot of the local synced database. Direct tags are read through the live SDK. Unknown powerup codes are returned as unknown, not guessed. Inherited tags and effective document pause state are not calculated.
 - The label adapter checks the installed version and worker-bundle fingerprint. If RemNote is upgraded, status calls refuse to claim native labels until the adapter is reviewed; the SDK editing tools remain available. `REMNOTE_APP_ASAR` overrides the default server app archive `/opt/remnote/app/resources/app.asar`.
 - Validation: `REMNOTE_DB=... node scripts/verify-status.mjs` compares Leech, Struggling and New against the installed app's extracted native history functions without modifying notes. `REMNOTE_DB=... node scripts/smoke-test.mjs` tests only temporary notes created by the script. Set `MCP_PROXY_URL=http://127.0.0.1:7789/mcp` to test the deployed HTTP endpoint.
+
+## Public source history
+
+This public copy retains the implementation history and rollback tags, with deployment-specific details replaced by examples and Git author email addresses replaced by a GitHub no-reply address. Its rewritten commit identifiers differ from those in the original private checkout. Keep personal deployment configuration and credentials outside the public repository.
