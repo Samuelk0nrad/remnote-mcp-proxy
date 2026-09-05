@@ -20,6 +20,10 @@ function fixture({text = ['Question'], back = ['Old answer'], type = 'forward', 
     const {operation} = args;
     if (operation === 'find_many') return {rems: rem ? [copy(rem)] : [], total:rem ? 1 : 0};
     if (!rem) throw new Error('Missing test Rem');
+    if (children.includes(args.remId)) {
+      if (operation === 'get') return {rem:{remId:args.remId,parentRemId:rem.remId,children:[],text:['Context'],updatedAt:1}};
+      if (operation === 'state') return {isCardItem:false,isListItem:false};
+    }
     if (operation === 'get') return {rem:copy(rem)};
     if (operation === 'state') return copy(state);
     if (operation === 'cards') return {cards:copy(cards)};
@@ -361,4 +365,57 @@ test('keep readback tolerates its own asynchronous SQLite marker removal',async(
   const before=await service.read('testRem123');
   const result=await service.keep({rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'Correct.'});
   assert.equal(result.verified,true);assert.equal(f.writes.length,1);
+});
+
+function childAnswerFixture() {
+  const f=fixture({children:['answerChild','sourceChild']});delete f.rem.backText;
+  const children={answerChild:{remId:'answerChild',parentRemId:'testRem123',children:['nestedChild'],text:[{text:'Answer',b:true}],updatedAt:1},nestedChild:{remId:'nestedChild',parentRemId:'answerChild',children:[],text:['Nested explanation'],updatedAt:1},sourceChild:{remId:'sourceChild',parentRemId:'testRem123',children:[],text:['Source only'],updatedAt:1}};
+  const marked={answerChild:true,nestedChild:true,sourceChild:false};
+  const run=async(name,args)=>{
+    if(children[args.remId]){
+      if(args.operation==='get')return {rem:copy(children[args.remId])};
+      if(args.operation==='state')return {isCardItem:marked[args.remId],isListItem:false};
+    }
+    return f.run(name,args);
+  };
+  return {...f,base:f,children,marked,run,service:createFlashcardService(run,f.repository,'test-secret')};
+}
+test('reads marked child answers even with no inline back or parent multiline marker',async()=>{
+  const f=childAnswerFixture(),r=await f.service.read('testRem123');
+  assert.equal(r.has_back,false);assert.equal(r.back,'');assert.equal(r.card_structure.multiline,true);assert.equal(r.card_structure.multiline_item,false);
+  assert.equal(r.answer_inspection.source,'child_items');assert.equal(r.answer_inspection.rendering_verified,false);
+  assert.equal(r.answer_items.length,1);assert.deepEqual(r.answer_items[0].front_rich_text,[{text:'Answer',b:true}]);assert.equal(r.answer_items[0].children[0].rem_id,'nestedChild');assert.equal(r.supported_basic_card,false);
+  await assert.rejects(()=>f.service.update({rem_id:r.rem_id,expected_revision:r.revision,back:'Flattened answer'},'flashcard'),/Only basic/);assert.equal(f.writes.length,0);
+});
+test('unmarked context alone does not become an inferred answer',async()=>{
+  const f=childAnswerFixture();f.marked.answerChild=false;
+  const r=await f.service.read('testRem123');assert.equal(r.answer_items.length,0);assert.equal(r.card_structure.multiline,false);assert.equal(r.answer_inspection.source,'no_inline_or_marked_child_answer');
+});
+test('child answer changes and membership changes invalidate the parent revision',async()=>{
+  const f=childAnswerFixture(),before=await f.service.read('testRem123');
+  f.children.nestedChild.text=['Changed answer'];
+  await assert.rejects(()=>f.service.keep({rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'Already correct'}),/Revision conflict/);
+  const middle=await f.service.read('testRem123');f.marked.sourceChild=true;
+  const after=await f.service.read('testRem123');assert.notEqual(after.revision,middle.revision);assert.equal(after.answer_items.length,2);assert.equal(f.writes.length,0);
+});
+test('concurrent child changes, unknown metadata and excessive structure fail closed',async()=>{
+  for(const mode of ['changed','unknown','large']){
+    const f=childAnswerFixture();let reads=0;
+    if(mode==='large')f.base.rem.children=Array.from({length:51},(_,i)=>`child${i}`);
+    const run=async(name,args)=>{
+      if(mode==='unknown'&&args.remId==='answerChild'&&args.operation==='state')return {};
+      if(mode==='changed'&&args.remId==='answerChild'&&args.operation==='get'&&++reads===2)f.children.answerChild.text=['Changed during read'];
+      if(mode==='large'&&args.remId.startsWith('child'))return args.operation==='get'?{rem:{remId:args.remId,parentRemId:'testRem123',children:[],text:['Context']}}:{isCardItem:false};
+      return f.run(name,args);
+    };
+    await assert.rejects(()=>createFlashcardService(run,f.repository,'test-secret').read('testRem123'),/Child answer changed|Incomplete child|too large/);assert.equal(f.writes.length,0);
+  }
+});
+test('keep unchanged verifies marked child answer content after marker removal',async()=>{
+  const f=childAnswerFixture();
+  const service=createFlashcardService(async(name,args)=>{
+    const r=await f.run(name,args);if(args.operation==='remove_powerup')f.children.answerChild.text=['Unexpected concurrent change'];return r;
+  },f.repository,'test-secret');
+  const before=await service.read('testRem123');
+  await assert.rejects(()=>service.keep({rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'Already correct'}),/unchanged content could not be verified/);
 });

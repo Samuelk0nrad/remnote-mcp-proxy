@@ -63,6 +63,27 @@ try{
  const comparison=await call('compare_study_topics',{timezone:'UTC',root_rem_ids:[id,keepId]});assert.equal(comparison.topics.length,2);assert.ok(comparison.topics.every(topic=>topic.reviews.graded_reviews===0));
  const forecast=await call('get_study_workload_forecast',{timezone:'UTC',root_rem_id:keepId,days:7});assert.equal(forecast.daily.length,7);results.review_analytics=true;
  results.keep_unchanged=true;await remove(keepId);
+ const childRoot=await create('child answer question');
+ const childIds=[];
+ for(const [markdown,isAnswer] of [['**Marked answer**',true],['Ordinary context',false]]){
+  const child=(await runtime('remnote_rem',{operation:'create_single_markdown',markdown,parentRemId:childRoot})).rem?.remId;
+  if(!child)throw new Error('No synthetic child ID');created.add(child);childIds.push(child);
+  if(isAnswer)await runtime('remnote_rem',{operation:'set_card_item',remId:child,value:true});
+ }
+ for(let i=0;i<30;i++){if((await runtime('remnote_rem',{operation:'cards',remId:childRoot})).cards?.length)break;await new Promise(resolve=>setTimeout(resolve,100));}
+ const childBefore=await call('read_flashcard',{rem_id:childRoot});
+ assert.ok(childBefore.cards.length);assert.equal(childBefore.back,'');
+ assert.equal(childBefore.card_structure.multiline,true);assert.equal(childBefore.card_structure.multiline_item,false);
+ assert.equal(childBefore.answer_inspection.source,'child_items');assert.equal(childBefore.answer_inspection.rendering_verified,false);
+ assert.deepEqual(childBefore.answer_items.map(item=>item.rem_id),[childIds[0]]);
+ assert.ok(childBefore.answer_items[0].front_rich_text.some(part=>typeof part==='object'));
+ await assert.rejects(()=>call('update_flashcard',{rem_id:childRoot,expected_revision:childBefore.revision,back:'Flattened answer'}),/Only basic forward\/backward cards/);
+ await runtime('remnote_rem',{operation:'set_text',remId:childIds[0],richText:['Changed synthetic answer']});
+ const childAfter=await call('read_flashcard',{rem_id:childRoot});assert.notEqual(childAfter.revision,childBefore.revision);
+ await remove(childRoot);
+ assert.equal((await runtime('remnote_rem',{operation:'find_many',remIds:childIds})).total,0);
+ for(const child of childIds)created.delete(child);
+ results.marked_child_answers=true;
  const workload=await call('get_study_workload',{timezone:'UTC',root_rem_id:id});assert.equal(workload.inventory.current_cards,1);assert.equal(workload.reviews.graded_reviews,0);
  const stats=await call('list_card_review_stats',{timezone:'UTC',root_rem_id:id});assert.equal(stats.total,1);assert.equal(stats.items[0].lifetime.graded_reviews,0);results.workload_tools=true;
 

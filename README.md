@@ -8,7 +8,7 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 
 | Task | Tool | Behavior |
 | --- | --- | --- |
-| Inspect a card before editing | `read_flashcard` | Returns stored front/back, rich text, card IDs, direction and a revision. |
+| Inspect a card before editing | `read_flashcard` | Returns inline front/back, marked child answers, rich text, card IDs, direction and a revision. |
 | Change a question or answer | `update_flashcard` | Updates each side separately and verifies the saved result. |
 | Change only a Rem's front/text | `update_rem_front` | Preserves the back and card direction. |
 | Review pending corrections | `get_edit_later_queue` | Returns queued items with totals and pagination. |
@@ -133,9 +133,11 @@ This removes only the Edit Later powerup through the SDK and verifies that the s
 
 ### Supported cards and editing limits
 
+- An empty inline `back` does **not** establish a blank practice answer. RemNote marks the answer's children as [Multi-line Card Items](https://help.remnote.com/en/articles/9216774-multi-line-list-set-flashcards); the question itself can lack that marker and still have a `forward` practice card. `read_flashcard` returns those children in `answer_items`, including nested marked items and their rich text. `card_structure.multiline` includes these parent cards; `multiline_item` identifies a Rem that is itself marked as an answer item.
+- Check `answer_inspection.source` and `answer_items` before assessing missing content. Unmarked child notes are not assumed to be answers. `rendering_verified` remains false: the SDK structure is not a practice-screen preview, and extra detail, hidden content and other display rules may affect rendering. Inspection is bounded to 50 children across the inspected branches and eight nesting levels; incomplete, changing or larger structures are refused instead of guessed.
 - Basic forward, backward and bidirectional cards are supported. Stored front/back are not necessarily the displayed question/answer of a backward practice card.
 - Cloze, multiline, multiple-choice and other unsupported card structures are refused for editing. Reads remain available when the SDK provides complete metadata.
-- Revisions reject stale edits, and writes through this proxy are serialized per Rem. Other clients can still change a card between a check and a write.
+- Revisions include marked child-answer content and structure, so changing a child invalidates the parent's earlier revision. Writes through this proxy are serialized per Rem. Other clients can still change a card between a check and a write.
 - Updating both sides requires separate SDK operations. A failure can leave a partial change. Read the card again before recovery; the proxy leaves Edit Later unresolved and does not automatically retry or roll back.
 - `delete_rem` refuses unknown types, documents and folders. Deleting a parent requires `allow_descendants: true`, which also authorizes deletion of its subtree. Git rollback restores code, not notes.
 - Verification tokens expire after seven days. Changing the MCP authentication token invalidates them.

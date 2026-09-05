@@ -116,7 +116,7 @@ export function createStatusService(repository, run, verifyAdapter) {
         return {items,count:items.length,total,has_more:more>0,next_cursor:more?Buffer.from(JSON.stringify({status,rem_id:remId,card_id:items.at(-1).card_id})).toString('base64url'):null,
           leech_threshold:threshold,adapter:STATUS_ADAPTER,
           source:'Read-only local synced RemNote database; native label rules verified for the installed app build.',
-          field_semantics:'Stored front/back are not swapped for backward practice. Rem-level powerups and tags are distinct from computed card labels. Disabled excludes Edit Later and retired cards; paused documents are not classified as disabled solely because they are paused.',
+          field_semantics:'Stored front/back are inline fields, not rendered practice sides. An empty back may have marked child answers; call read_flashcard to inspect them. Stored fields are not swapped for backward practice. Rem-level powerups and tags are distinct from computed card labels. Disabled excludes Edit Later and retired cards; paused documents are not classified as disabled solely because they are paused.',
         };
       } finally { db.exec('COMMIT'); }
     });

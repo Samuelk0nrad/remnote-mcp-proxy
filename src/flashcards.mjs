@@ -10,7 +10,7 @@ const tool = (name, description, properties, required, readOnly = false) => ({
   annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: false },
 });
 export const FLASHCARD_TOOLS = [
-  tool('read_flashcard', 'Read a Rem through the live SDK before editing or deleting. Returns separate stored front/back, rich text, practice direction, card IDs, child IDs and a revision. Stored sides are not swapped for backward practice. Also supports ordinary Rems and documents for inspection.', { rem_id: idSchema }, ['rem_id'], true),
+  tool('read_flashcard', 'Read a Rem through the live SDK before editing or deleting. Returns separate stored front/back, marked child answer items, rich text, practice direction, card IDs, child IDs and a revision. An empty inline back does not mean a blank practice answer. Stored sides are not swapped for backward practice. Also supports ordinary Rems and documents for inspection.', { rem_id: idSchema }, ['rem_id'], true),
   tool('update_flashcard', 'Update an existing basic forward/backward flashcard by Rem ID. Read first and copy expected_revision. Supply front and/or back separately; omitted sides and practice direction are preserved. Never concatenate question, separator and answer. Strings cannot replace structured rich text. Verifies both saved sides and card identity. Returns a verification_token for resolving Edit Later. Unsupported card types are refused.', {
     rem_id: idSchema, expected_revision: revisionSchema, front: plainSchema, back: plainSchema,
     front_rich_text: richSchema, back_rich_text: richSchema,
@@ -85,6 +85,33 @@ export function createFlashcardService(run, repository, tokenSecret) {
     try { return await action(); } finally { release(); if (locks.get(remId) === next) locks.delete(remId); }
   }
   const remCall = (operation, remId, more = {}) => run('remnote_rem', { operation, remId, ...more });
+  async function inspectAnswerItems(parent) {
+    const observed = [], visited = new Set([parent.remId]);
+    async function childrenOf(node, depth) {
+      if (depth > 8) throw new Error('Answer nesting is too deep for a verified read.');
+      const items = [];
+      for (const childId of node.children) {
+        if (visited.has(childId) || observed.length >= 50) throw new Error('Answer structure is cyclic or too large for a verified read.');
+        visited.add(childId);
+        const child = (await remCall('get', childId))?.rem;
+        const state = await remCall('state', childId);
+        if (!child || child.remId !== childId || child.parentRemId !== node.remId || !Array.isArray(child.text) || !Array.isArray(child.children) || (child.backText != null && !Array.isArray(child.backText)) || typeof state?.isCardItem !== 'boolean') throw new Error('Incomplete child-answer metadata; refusing to guess.');
+        const shape = { is_card_item:state.isCardItem, is_list_item:state.isListItem === true };
+        observed.push({ rem:child, shape });
+        if (state.isCardItem) items.push({ rem_id:childId, front_rich_text:child.text, back_rich_text:child.backText ?? [], has_back:Array.isArray(child.backText), ...shape, children:await childrenOf(child, depth + 1) });
+      }
+      return items;
+    }
+    const items = await childrenOf(parent, 0);
+    return { items, observed, async verify() {
+      // Also recheck unmarked children: adding one to the answer changes meaning.
+      for (const old of observed) {
+        const fresh = (await remCall('get', old.rem.remId))?.rem;
+        const state = await remCall('state', old.rem.remId);
+        if (!equal(fresh, old.rem) || !equal({is_card_item:state?.isCardItem,is_list_item:state?.isListItem===true}, old.shape)) throw new Error('Child answer changed while reading; call read_flashcard again.');
+      }
+    } };
+  }
   async function read(remId, checkQueue = true) {
     id(remId);
     const queue = repository.get?.(remId) ?? null;
@@ -113,25 +140,32 @@ export function createFlashcardService(run, repository, tokenSecret) {
       cardStructure[name] = result.hasPowerup;
     }
     const cards = cardResult.cards.map(c => ({ card_id: c.cardId, rem_id: c.remId, type: c.type })).sort((a, b) => a.card_id.localeCompare(b.card_id));
+    const childAnswer = cards.length || Array.isArray(rem.backText) || state.isCardItem === true ? await inspectAnswerItems(rem) : null;
+    const answerItems = childAnswer?.items ?? [];
+    // RemNote marks the CHILD as a multiline card item, not necessarily the parent.
+    cardStructure.multiline_item = cardStructure.multiline || state.isCardItem === true;
+    cardStructure.multiline = cardStructure.multiline_item || answerItems.length > 0;
     const snapshot = {
       rem_id: remId, front_rich_text: rem.text, back_rich_text: rem.backText ?? [],
       has_back: Array.isArray(rem.backText), parent_rem_id: rem.parentRemId ?? null,
-      children: rem.children, rem_type: rem.type ?? null, state, cards, card_structure: cardStructure,
+      children: rem.children, rem_type: rem.type ?? null, state, cards, card_structure: cardStructure, answer_items:answerItems,
       updated_at: rem.updatedAt ?? null,
     };
     // Detect a concurrent edit during the multi-call read.
+    await childAnswer?.verify();
     const check = (await remCall('get', remId))?.rem;
     if (!equal(rem, check)) throw new Error('Rem changed while reading; call read_flashcard again.');
     if (checkQueue && queueVersion(remId) !== queueRevision) throw new Error('Edit Later feedback changed while reading; call read_flashcard again.');
     return { ...snapshot, front: plainText(rem.text), back: plainText(rem.backText),
+      answer_inspection: { source:childAnswer === null ? 'not_inspected' : answerItems.length ? (plainText(rem.backText).trim() ? 'inline_and_child_items' : 'child_items') : (plainText(rem.backText).trim() ? 'inline_back' : 'no_inline_or_marked_child_answer'), inspected:childAnswer !== null, rendering_verified:false, note:'Marked child items can supply the answer even when back is empty. Ordinary unmarked children are not assumed to be answer items. This is stored structure, not a rendered practice preview; extra detail, hidden content and other rendering rules may affect the screen.' },
       edit_later: { queued: queue !== null, queue_revision: queueRevision, feedback_rich_text: queue?.feedback_rich_text ?? [], added_at: queue?.added_at ?? null },
       practice_direction: state.practiceDirection ?? null,
-      field_semantics: 'front/back are stored Rem sides; backward practice reverses their roles. Arrows within either field are literal content.',
+      field_semantics: 'front/back are stored inline Rem sides; answer_items holds marked child answers and must be inspected before judging an empty back. A parent can be multiline without its own multiline powerup; backward practice reverses their roles. Arrows within either field are literal content.',
       revision: digest(snapshot),
       supported_basic_card: cards.length > 0 && cards.every(c => ['forward', 'backward'].includes(c.type)) && state.isCardItem === false && !cardStructure.multiline && !cardStructure.multiple_choice && Array.isArray(rem.backText),
     };
   }
-  const structure = s => ({parent: s.parent_rem_id, children: s.children, type: s.rem_type, state: s.state, cards: s.cards, card_structure: s.card_structure, has_back: s.has_back});
+  const structure = s => ({parent: s.parent_rem_id, children: s.children, type: s.rem_type, state: s.state, cards: s.cards, card_structure: s.card_structure, answer_items:s.answer_items, has_back: s.has_back});
   function checkRevision(snapshot, revision) {
     expectedRevision(revision);
     if (snapshot.revision !== revision) throw new Error('Revision conflict: the Rem changed since it was read. Read it again and reconsider the edit. No write was attempted.');
@@ -227,7 +261,7 @@ export function createFlashcardService(run, repository, tokenSecret) {
       const after = await read(args.rem_id, false);
       const marker = await remCall('has_powerup', args.rem_id, { powerupCode: 'e' });
       // Marker removal can change scheduling state and update timestamps.
-      const content = s => ({ front:s.front_rich_text, back:s.back_rich_text, has_back:s.has_back, parent:s.parent_rem_id, children:s.children, type:s.rem_type, cards:s.cards, card_structure:s.card_structure, direction:s.practice_direction });
+      const content = s => ({ front:s.front_rich_text, back:s.back_rich_text, has_back:s.has_back, parent:s.parent_rem_id, children:s.children, type:s.rem_type, cards:s.cards, card_structure:s.card_structure, answer_items:s.answer_items, direction:s.practice_direction });
       if (marker?.hasPowerup !== false || !equal(content(before), content(after))) throw new Error('Marker removal was attempted but unchanged content could not be verified. Read the Rem before recovery; do not blindly retry.');
       return { ok:true, verified:true, kept_unchanged:true, rem_id:args.rem_id, review_reason:args.review_reason.trim() };
     });
