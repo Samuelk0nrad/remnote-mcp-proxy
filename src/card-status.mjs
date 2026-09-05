@@ -97,7 +97,7 @@ export function createStatusService(repository, run, verifyAdapter) {
         const threshold = readLeechThreshold(db);
         const rows = db.prepare(`SELECT c._id AS card_id, c.doc AS card_doc, r._id AS rem_id, r.doc AS rem_doc
           FROM cards c JOIN quanta r ON json_extract(c.doc,'$.rId') = r._id
-          WHERE COALESCE(json_extract(c.doc,'$.b'),0) <> 1 AND (? IS NULL OR r._id = ?) ORDER BY c._id`).iterate(remId ?? null,remId ?? null);
+          WHERE (COALESCE(json_extract(c.doc,'$.b'),0) <> 1 OR json_extract(r.doc,'$.apu.e.v') = 1) AND (? IS NULL OR r._id = ?) ORDER BY c._id`).iterate(remId ?? null,remId ?? null);
         let total=0, more=0;const items=[];const now=Date.now();
         for (const row of rows) {
           const card=JSON.parse(row.card_doc),rem=JSON.parse(row.rem_doc);

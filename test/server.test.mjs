@@ -311,3 +311,14 @@ test('Edit Later cards hidden by getCards retain their persisted live SDK identi
   const result=await service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'Corrected'},'flashcard');
   assert.deepEqual(result.card.cards,before.cards);assert.equal(result.verified,true);
 });
+test('persisted identity lookup includes dormant cards retained by Edit Later',t=>{
+  const {file,repository}=databaseFixture(t,1);const db=new DatabaseSync(file);
+  db.prepare('INSERT INTO cards VALUES (?,?)').run('dormantCard',JSON.stringify({rId:'testRem000',c:'f',b:true}));
+  db.close();assert.deepEqual(repository.cardIds('testRem000'),['dormantCard']);
+});
+test('Edit Later status includes its dormant retained practice card',async t=>{
+  const {file,repository}=databaseFixture(t,1);const db=new DatabaseSync(file);db.exec('CREATE TABLE user_data (_id TEXT,doc TEXT)');
+  db.prepare('INSERT INTO cards VALUES (?,?)').run('dormantCard',JSON.stringify({rId:'testRem000',c:'f',b:true}));db.close();
+  const service=createStatusService(repository,async()=>{},async()=>{});
+  const result=await service.list({status:'edit_later'});assert.equal(result.total,1);assert.equal(result.items[0].labels.disabled,false);
+});
