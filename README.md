@@ -1,6 +1,6 @@
 # RemNote MCP proxy
 
-An MCP proxy for RemNote Desktop that keeps flashcard fronts and backs separate, verifies edits, exposes card labels such as **Leech** and **Edit Later**, and summarizes study activity.
+An MCP proxy for RemNote Desktop that keeps flashcard fronts and backs separate, verifies edits, exposes card labels such as **Leech** and **Edit Later**, summarizes study activity, and creates cards inside exact topic headings.
 
 The proxy forwards RemNote's built-in tools and adds guarded editing and inspection tools. It reads the local synced database in read-only mode and makes note changes through the RemNote Agent Runtime SDK.
 
@@ -8,6 +8,7 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 
 | Task | Tool | Behavior |
 | --- | --- | --- |
+| Create cards inside a topic | `create_flashcards` | Basic or multiline, explicit placement and direction, verified SDK writes and durable retry protection. |
 | Inspect a card before editing | `read_flashcard` | Returns inline front/back, marked child answers, rich text, card IDs, direction and a revision. |
 | Change a question or answer | `update_flashcard` | Updates each side separately and verifies the saved result. |
 | Change only a Rem's front/text | `update_rem_front` | Preserves the back and card direction. |
@@ -73,9 +74,14 @@ The MCP endpoint defaults to `http://127.0.0.1:7789/mcp`. Clients must send the 
 | `REMNOTE_AGENT_AUTH_PATH` | `~/.remnote-agent/auth.json` |
 | `REMNOTE_MCP_TOKEN` | Optional override for `remNoteMcpAccessToken` in the RemNote config. |
 | `REMNOTE_AGENT_TOKEN` | Optional override for `httpToken` in the runtime auth file. |
+| `REMNOTE_CREATION_JOURNAL` | Optional path for the proxy-owned retry database. Defaults to `~/.local/state/remnote-mcp-proxy/creation-<database-path-hash>.sqlite`. Keep it writable, persistent and separate from the RemNote database. |
 | `REMNOTE_APP_ASAR` | `/opt/remnote/app/resources/app.asar`; used to validate the label and history adapters. |
 
 Here, `~` means the home directory of the user running the proxy. Keep tokens and personal deployment configuration outside Git.
+
+## Create flashcards inside a topic
+
+Use `create_flashcards` after reading the topic outline and selecting the exact parent heading. Version 0.8.0 adds this tool, bringing the catalog to 38. Basic cards use separate literal front/back strings; multiline cards use `back.items`. Both support forward, backward or both directions. Placement is start/end or before/after an existing direct sibling. Optional source notes stay unmarked. See the [creation guide](docs/CREATION.md) for examples, limits and retry recovery.
 
 ## Edit a flashcard
 
@@ -144,7 +150,7 @@ This removes only the Edit Later powerup through the SDK and verifies that the s
 
 ## Review timing analytics
 
-Version 0.7.0 extends the five existing history/statistics/workload/comparison/trend tools; the catalog remains 37 tools. Total response time and stored reveal offset have separate summaries, rating breakdowns and trends. Timing is read-only and works with any subject. See the [timing data reference](docs/TIMING.md) for fields, exclusions, quantiles and verified source semantics.
+Version 0.7.0 extends the five existing history/statistics/workload/comparison/trend tools; that version kept the catalog at 37 tools (0.8.0 adds creation). Total response time and stored reveal offset have separate summaries, rating breakdowns and trends. Timing is read-only and works with any subject. See the [timing data reference](docs/TIMING.md) for fields, exclusions, quantiles and verified source semantics.
 
 Supply an optional `max_review_seconds` chosen for the analysis. Use `max_reveal_seconds` independently for reveal-offset filtering. Omit either parameter for **no cutoff on that measurement**. For example:
 

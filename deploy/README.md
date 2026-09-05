@@ -72,3 +72,12 @@ Use a new branch name for each rollback and repeat the relevant validation check
 The repository also retains historical rollback tags. In particular, `before-flashcard-safety` predates the guarded editing tools; restoring it removes those protections. Prefer the checkpoint for your own last working deployment. Public history was sanitized, so its commit identifiers differ from those of the original private checkout.
 
 Git checkpoints restore the proxy code. They do not restore deleted notes or undo edits in RemNote.
+
+
+## Creation request state
+
+Version 0.8.0 needs a writable, persistent proxy-owned SQLite journal for creation retry protection. The default is under the service user's `~/.local/state/remnote-mcp-proxy/`; set `REMNOTE_CREATION_JOURNAL` to override it. Use a separate journal for each knowledge base and share it among proxy instances serving that same knowledge base. Never point it at `remnote.db`. Do not place it in a temporary release directory or commit it to Git.
+
+Keep the journal through service restarts, upgrades and code rollbacks. Back it up using SQLite's backup facility (or while the proxy is stopped). Restoring an older journal can lose completed-request receipts and allow duplicate creation; reconcile requests before accepting retries after such a restore. The journal does not back up note content.
+
+After deploying, run the existing smoke test and `REMNOTE_DB=/absolute/path/to/remnote.db MCP_PROXY_URL=http://127.0.0.1:7789/mcp node scripts/smoke-create-flashcards.mjs`. The latter creates and removes only its own temporary fixtures. Verify the 38-tool catalog, then refresh the client with the user's approval.

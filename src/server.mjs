@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { ANALYTICS_TOOLS, createReviewAnalytics } from './review-analytics.mjs';
 import { WORKLOAD_TOOLS, createWorkloadService } from './workload.mjs';
 import { STATUS_TOOLS, createStatusService, createAdapterVerifier } from './card-status.mjs';
+import { CREATE_FLASHCARD_TOOL, CreationJournal, createCardCreationService } from './create-flashcards.mjs';
+import { createHash } from 'node:crypto';
 import { FLASHCARD_TOOLS, createFlashcardService, strictArgs } from './flashcards.mjs';
 
 const EDIT_LATER_CODE = 'e';
@@ -44,6 +46,7 @@ const EXTRA_TOOLS = [
     },
   },
   ...FLASHCARD_TOOLS,
+  CREATE_FLASHCARD_TOOL,
   ...STATUS_TOOLS,
   ...WORKLOAD_TOOLS,
   ...ANALYTICS_TOOLS,
@@ -390,8 +393,17 @@ export function createMcpHandler({
   repository,
   runtimeMcpRunner,
   logger = console,
+  creationJournal,
   verifyStatusAdapter = createAdapterVerifier(process.env.REMNOTE_APP_ASAR ?? '/opt/remnote/app/resources/app.asar'),
 }) {
+  let journal = creationJournal;
+  const creation = createCardCreationService(runtimeMcpRunner, () => {
+    if (!journal) {
+      const scope = createHash('sha256').update(process.env.REMNOTE_DB ?? 'default').digest('hex').slice(0, 16);
+      journal = new CreationJournal(process.env.REMNOTE_CREATION_JOURNAL ?? path.join(os.homedir(), '.local', 'state', 'remnote-mcp-proxy', `creation-${scope}.sqlite`));
+    }
+    return journal;
+  });
   const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken);
   const status = createStatusService(repository, runtimeMcpRunner, verifyStatusAdapter);
   const workload = createWorkloadService(repository, runtimeMcpRunner, verifyStatusAdapter);
@@ -428,7 +440,8 @@ export function createMcpHandler({
         const upstream = await callUpstream(upstreamUrl, authorization, rpcRequest);
         if (upstream?.error || !Array.isArray(upstream?.result?.tools)) throw new Error('Official tool catalog was unavailable.');
         const customNames = new Set(EXTRA_TOOLS.map(tool => tool.name));
-        upstream.result.tools = [...upstream.result.tools.filter(tool => !customNames.has(tool.name)), ...EXTRA_TOOLS];
+        upstream.result.tools = [...upstream.result.tools.filter(tool => !customNames.has(tool.name)).map(tool =>
+          ['append_doc', 'create_doc'].includes(tool.name) ? { ...tool, description: `${tool.description ?? ''} For new flashcards inside a topic or heading, prefer create_flashcards with separate typed sides and exact placement.` } : tool), ...EXTRA_TOOLS];
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify(upstream));
         return;
@@ -462,7 +475,7 @@ export function createMcpHandler({
             ...(contextError ? { context_warning: contextError } : {}),
           };
           response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ jsonrpc: '2.0', id: rpcRequest.id, result: toolResult(payload) }));
+          response.end(JSON.stringify({ jsonrpc: '2.0', id: rpcRequest.id, result: { ...toolResult(payload), ...(payload.ok === false ? { isError: true } : {}) } }));
           return;
         }
 
@@ -485,6 +498,8 @@ export function createMcpHandler({
           payload = await status.get(args);
         } else if (name === 'list_cards_by_status') {
           payload = await status.list(args);
+        } else if (name === 'create_flashcards') {
+          payload = await creation.create(args);
         } else if (name === 'read_flashcard') {
           strictArgs(args, ['rem_id'], ['rem_id']);
           payload = await flashcards.read(args.rem_id);
@@ -502,7 +517,7 @@ export function createMcpHandler({
         }
         if (payload !== undefined) {
           response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ jsonrpc: '2.0', id: rpcRequest.id, result: toolResult(payload) }));
+          response.end(JSON.stringify({ jsonrpc: '2.0', id: rpcRequest.id, result: { ...toolResult(payload), ...(payload.ok === false ? { isError: true } : {}) } }));
           return;
         }
 
