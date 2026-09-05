@@ -1,0 +1,18 @@
+[Unit]
+Description=RemNote MCP proxy with Edit Later tools
+After=network.target agent-remnote-write-bridge.service
+Wants=agent-remnote-write-bridge.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/remnote/remnote/remnote-mcp-proxy
+Environment=HOST=127.0.0.1
+Environment=PORT=7789
+Environment=REMNOTE_DB=/home/remnote/remnote/remnote-YOUR_KNOWLEDGE_BASE_ID/remnote.db
+Environment=REMNOTE_UPSTREAM_URL=http://127.0.0.1:7788/mcp
+ExecStart=/usr/bin/node /home/remnote/remnote/remnote-mcp-proxy/src/server.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

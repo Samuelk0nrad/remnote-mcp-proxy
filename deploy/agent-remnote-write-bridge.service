@@ -1,0 +1,13 @@
+[Unit]
+Description=RemNote Agent Runtime SDK bridge
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/remnote/remnote/remnote-agent-runtime
+ExecStart=/usr/bin/node /home/remnote/remnote/remnote-agent-runtime/packages/server/dist/index.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

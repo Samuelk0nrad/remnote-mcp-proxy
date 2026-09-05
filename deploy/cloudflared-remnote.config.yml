@@ -1,0 +1,17 @@
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /home/remnote/.cloudflared/00000000-0000-0000-0000-000000000000.json
+
+ingress:
+  - hostname: remnote-mcp.example.com
+    path: ^/mcp$
+    service: http://127.0.0.1:7789
+    originRequest:
+      httpHostHeader: 127.0.0.1:7789
+
+  - hostname: remnote-agent.example.com
+    path: ^/mcp$
+    service: http://127.0.0.1:7789
+    originRequest:
+      httpHostHeader: 127.0.0.1:7789
+
+  - service: http_status:404
