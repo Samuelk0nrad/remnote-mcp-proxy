@@ -141,3 +141,8 @@ Proxy 0.7.0 adds separate reveal-offset summaries and trends under `timing.revea
 ### Creating cards in the right section
 
 Proxy 0.8.0 adds `create_flashcards`; refresh the catalog to load all 38 tools. Ask ChatGPT to read the outline, select the exact destination heading, and use this tool instead of appending card-formatted Markdown to a document. Each card has a type, separate answer structure, and a supported direction. Reuse the same request key and arguments after a timeout. A replay is the original receipt, not a fresh content inspection. See the [creation guide](CREATION.md).
+
+
+### Searching and ranking flashcards
+
+Proxy 0.9.0 adds `list_flashcards` (39 tools). Refresh the catalog to load it. Ask for cards within a selected topic, with explicit filters and sort metrics; the tool searches full stored content and ranks all matches before pagination. A result groups practice directions under one question. Dates and thresholds are explicit, and unknown timing stays null. Use `read_flashcard` before any edit. See the [listing guide](LISTING.md).

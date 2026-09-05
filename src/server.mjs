@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { ANALYTICS_TOOLS, createReviewAnalytics } from './review-analytics.mjs';
 import { WORKLOAD_TOOLS, createWorkloadService } from './workload.mjs';
 import { STATUS_TOOLS, createStatusService, createAdapterVerifier } from './card-status.mjs';
+import { LIST_FLASHCARD_TOOL, createFlashcardListing } from './list-flashcards.mjs';
 import { CREATE_FLASHCARD_TOOL, CreationJournal, createCardCreationService } from './create-flashcards.mjs';
 import { createHash } from 'node:crypto';
 import { FLASHCARD_TOOLS, createFlashcardService, strictArgs } from './flashcards.mjs';
@@ -47,6 +48,7 @@ const EXTRA_TOOLS = [
   },
   ...FLASHCARD_TOOLS,
   CREATE_FLASHCARD_TOOL,
+  LIST_FLASHCARD_TOOL,
   ...STATUS_TOOLS,
   ...WORKLOAD_TOOLS,
   ...ANALYTICS_TOOLS,
@@ -408,6 +410,7 @@ export function createMcpHandler({
   const status = createStatusService(repository, runtimeMcpRunner, verifyStatusAdapter);
   const workload = createWorkloadService(repository, runtimeMcpRunner, verifyStatusAdapter);
   const analytics = createReviewAnalytics(repository, verifyStatusAdapter);
+  const listing = createFlashcardListing(repository, verifyStatusAdapter);
   return async function handler(request, response) {
     if (request.url !== '/mcp') {
       response.writeHead(404).end('Not found');
@@ -498,6 +501,8 @@ export function createMcpHandler({
           payload = await status.get(args);
         } else if (name === 'list_cards_by_status') {
           payload = await status.list(args);
+        } else if (name === 'list_flashcards') {
+          payload = await listing.list(args);
         } else if (name === 'create_flashcards') {
           payload = await creation.create(args);
         } else if (name === 'read_flashcard') {

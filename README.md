@@ -8,6 +8,7 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 
 | Task | Tool | Behavior |
 | --- | --- | --- |
+| Search and rank cards | `list_flashcards` | One question per result, full-topic filtering/sorting, content, dates, labels, review metrics and pagination. |
 | Create cards inside a topic | `create_flashcards` | Basic or multiline, explicit placement and direction, verified SDK writes and durable retry protection. |
 | Inspect a card before editing | `read_flashcard` | Returns inline front/back, marked child answers, rich text, card IDs, direction and a revision. |
 | Change a question or answer | `update_flashcard` | Updates each side separately and verifies the saved result. |
@@ -79,9 +80,13 @@ The MCP endpoint defaults to `http://127.0.0.1:7789/mcp`. Clients must send the 
 
 Here, `~` means the home directory of the user running the proxy. Keep tokens and personal deployment configuration outside Git.
 
+## Search, filter and rank flashcards
+
+`list_flashcards` searches any topic outline or the whole knowledge base, groups practice directions under each question, and ranks all matching cards before pagination. Filter by content, card structure, direction, labels, enabled state, dates, counts, rating proportions or timing. Missing measurements stay null. See the [listing guide](docs/LISTING.md) for examples and precise metric semantics.
+
 ## Create flashcards inside a topic
 
-Use `create_flashcards` after reading the topic outline and selecting the exact parent heading. Version 0.8.0 adds this tool, bringing the catalog to 38. Basic cards use separate literal front/back strings; multiline cards use `back.items`. Both support forward, backward or both directions. Placement is start/end or before/after an existing direct sibling. Optional source notes stay unmarked. See the [creation guide](docs/CREATION.md) for examples, limits and retry recovery.
+Use `create_flashcards` after reading the topic outline and selecting the exact parent heading. Version 0.8.0 adds this tool, bringing that version’s catalog to 38. Version 0.9.0 adds `list_flashcards` for a total of 39. Basic cards use separate literal front/back strings; multiline cards use `back.items`. Both support forward, backward or both directions. Placement is start/end or before/after an existing direct sibling. Optional source notes stay unmarked. See the [creation guide](docs/CREATION.md) for examples, limits and retry recovery.
 
 ## Edit a flashcard
 
