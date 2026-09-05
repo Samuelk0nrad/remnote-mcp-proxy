@@ -142,6 +142,25 @@ This removes only the Edit Later powerup through the SDK and verifies that the s
 - `delete_rem` refuses unknown types, documents and folders. Deleting a parent requires `allow_descendants: true`, which also authorizes deletion of its subtree. Git rollback restores code, not notes.
 - Verification tokens expire after seven days. Changing the MCP authentication token invalidates them.
 
+## Review timing analytics
+
+Version 0.6.0 extends the five existing history/statistics/workload/comparison/trend tools; the catalog remains 37 tools. Timing is read-only and works with any subject. See the [timing data reference](docs/TIMING.md) for fields, exclusions, quantiles and verified source semantics.
+
+Supply an optional `max_review_seconds` chosen for the analysis. Omit it for **no duration cutoff**. For example:
+
+```json
+{
+  "timezone": "Europe/Vienna",
+  "start_date": "2026-09-01",
+  "end_date": "2026-09-05",
+  "max_review_seconds": 600
+}
+```
+
+Use these arguments with `get_study_workload`, optionally adding `root_rem_id` for a topic. The threshold affects only the additional filtered timing statistics; it never removes timeline entries, changes review counts, caps raw durations, or changes stored data. Explain why you chose it, use the same value across comparisons, and report exclusions alongside unfiltered results. This is elapsed time, not measured active study time.
+
+Run the read-only live timing parity check with `REMNOTE_DB=/path/to/remnote.db node scripts/verify-timing.mjs` as the runtime user. It compares recorded values with all five analytics views without printing note content. The isolated smoke test also checks timing through the MCP endpoint. Follow the existing [deployment and rollback procedure](deploy/README.md), then refresh the MCP catalog for the new optional parameter.
+
 ## Inspect labels and tags
 
 Call `list_cards_by_status` with, for example:

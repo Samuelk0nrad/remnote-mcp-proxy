@@ -75,3 +75,26 @@ test('filters, cursors and adapter changes fail before claiming analytics',async
   const blocked=createReviewAnalytics({withDatabase(){throw new Error('must not scan');}},async()=>{throw new Error('Adapter changed');});await assert.rejects(()=>blocked.forecast({timezone:'UTC'}),/Adapter changed/);
   for(const spec of ANALYTICS_TOOLS)assert.equal(spec.annotations.readOnlyHint,true);
 });
+
+test('five timing views agree while threshold flags retain the complete review timeline',async t=>{
+ const f=fixture(t);
+ const h=[event('2025-12-31',1,{responseTime:1000}),event('2026-01-01',0,{responseTime:10000,revealTime:7000}),event('2026-01-02',.5,{responseTime:20000}),event('2026-01-09',1,{responseTime:30000}),event('2026-01-10',1.5,{responseTime:900000}),event('2026-01-11',.01,{responseTime:999999})];
+ f.card('cardAlpha','childAlpha',h,{a:1});
+ const opts={...options,max_review_seconds:30};
+ const timeline=await f.service.timeline({...opts,rem_id:'childAlpha'});assert.equal(timeline.total,5);assert.equal(timeline.items[3].timing.exceeds_selected_threshold,true);assert.equal(timeline.items[0].timing.recorded_seconds,10);
+ const summary=await f.workload.summary({...opts,root_rem_id:'rootAlpha'});assert.equal(summary.timing.unfiltered.recorded_seconds,960);assert.equal(summary.timing.filtered.recorded_seconds,60);assert.equal(summary.timing.graded_reviews,4);
+ assert.equal(summary.daily.reduce((sum,d)=>sum+(d.timing.unfiltered.recorded_seconds??0),0),960);
+ const stats=await f.workload.list(opts);assert.deepEqual(stats.items[0].timing.period,summary.timing);assert.equal(stats.items[0].timing.lifetime.unfiltered.recorded_seconds,961);
+ const compare=await f.service.compare({...opts,root_rem_ids:['rootAlpha','rootBeta']});assert.deepEqual(compare.topics[0].timing,summary.timing);assert.equal(compare.topics[1].timing.unfiltered.median_seconds,null);
+ const trend=(await f.service.trends({...opts,min_reviews:2})).items[0];assert.deepEqual(trend.timing.period,summary.timing);assert.equal(trend.timing.change.unfiltered.median_seconds_change,450);assert.equal(trend.timing.change.filtered.status,'insufficient_timed_reviews');
+ const raw=await f.workload.summary({...options,root_rem_id:'rootAlpha'});assert.equal(raw.timing.filtered,null);assert.deepEqual(raw.timing.unfiltered,summary.timing.unfiltered);
+});
+test('timing filters, quality coverage and pagination stay consistent with review filters',async t=>{
+ const f=fixture(t);f.card('cardAlpha','childAlpha',[event('2026-01-01',1,{responseTime:1000,isCram:true}),event('2026-01-02',0,{responseTime:2000,addedExternally:true}),event('2026-01-09',.5,{responseTime:0}),event('2026-01-10',1),event('2026-01-11',3)]);f.card('cardBeta','rootBeta',[]);
+ const result=await f.service.compare({...options,review_mode:'regular',include_external:false,root_rem_ids:['rootAlpha','rootBeta']});const timing=result.topics[0].timing;assert.equal(timing.graded_reviews,2);assert.equal(timing.zero_duration_reviews,1);assert.equal(timing.missing_duration_reviews,1);assert.equal(timing.positive_only.samples,0);
+ const trend=(await f.service.trends({...options,min_reviews:2})).items[0];assert.equal(trend.timing.change.unfiltered.status,'reset_in_period');
+ const args={...options,rem_id:'childAlpha',max_review_seconds:10,limit:1};const page=await f.service.timeline(args);await assert.rejects(()=>f.service.timeline({...args,max_review_seconds:20,cursor:page.next_cursor}),/does not belong/);
+ const stat=await f.workload.list({...options,max_review_seconds:10,limit:1});await assert.rejects(()=>f.workload.list({...options,max_review_seconds:20,limit:1,cursor:stat.next_cursor}),/does not belong/);
+ for(const max_review_seconds of [0,-1,'5',null,Infinity]){await assert.rejects(()=>f.workload.summary({...options,max_review_seconds}));await assert.rejects(()=>f.service.timeline({...options,rem_id:'childAlpha',max_review_seconds}));}
+ await assert.rejects(()=>f.service.forecast({timezone:'UTC',max_review_seconds:10}),/Expected fields/);
+});

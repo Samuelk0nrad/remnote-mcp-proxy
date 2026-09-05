@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { strictArgs } from './flashcards.mjs';
 import { STATUS_ADAPTER } from './card-status.mjs';
+import {timingProperties,validateTiming,timingSemantics,timingAccumulator} from './timing.mjs';
 
 export const properties = {
+  ...timingProperties,
   timezone:{type:'string',maxLength:100,description:'IANA timezone, e.g. Europe/Vienna. Required; never assume the server timezone.'},
   start_date:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$',description:'First study date, inclusive. Defaults to the current study date in timezone.'},
   end_date:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$',description:'Last study date, inclusive. Defaults to start_date. Maximum 366 days.'},
@@ -11,8 +13,8 @@ export const properties = {
 };
 const annotations={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 export const WORKLOAD_TOOLS=[
-  {name:'get_study_workload',description:'Summarize actual graded reviews, distinct practice cards and Rems studied, daily activity, enabled/disabled/Edit Later cards, and stored schedule candidates for a knowledge base or topic outline. Skips, leech views, resets and manual scheduling events are separate from reviews. Retained retired-card history is included; deleted/purged history is unavailable. Stored schedule candidates are NOT the native queue. Requires timezone; dates default to today. Read-only.',inputSchema:{type:'object',additionalProperties:false,properties:{...properties,include_live_queue:{type:'boolean',default:false,description:'Also read the currently open SDK review queue. Global session only, unrelated to root_rem_id; may be unavailable outside practice.'}},required:['timezone']},annotations},
-  {name:'list_card_review_stats',description:'Inspect how often individual practice cards were reviewed: period and retained lifetime graded counts, grade breakdown, last actual graded review, enabled state and next schedule. Includes retired rows with retained history. Filter to a topic outline with root_rem_id. Follow next_cursor with the same arguments; a changed database requires restarting. Does not expose note text or raw history.',inputSchema:{type:'object',additionalProperties:false,properties:{...properties,limit:{type:'integer',minimum:1,maximum:100,default:50},cursor:{type:'string',maxLength:2048}},required:['timezone']},annotations},
+  {name:'get_study_workload',description:'Summarize actual graded reviews, distinct practice cards and Rems studied, daily activity, enabled/disabled/Edit Later cards, and stored schedule candidates for a knowledge base or topic outline. Skips, leech views, resets and manual scheduling events are separate from reviews. Retained retired-card history is included; deleted/purged history is unavailable. Stored schedule candidates are NOT the native queue. Includes recorded review-time totals, medians, quartiles and timing by rating. Optional max_review_seconds adds transparent filtered statistics; raw totals remain. Elapsed time is not active study time. Requires timezone; dates default to today. Read-only.',inputSchema:{type:'object',additionalProperties:false,properties:{...properties,include_live_queue:{type:'boolean',default:false,description:'Also read the currently open SDK review queue. Global session only, unrelated to root_rem_id; may be unavailable outside practice.'}},required:['timezone']},annotations},
+  {name:'list_card_review_stats',description:'Inspect how often individual practice cards were reviewed: period and retained lifetime graded counts, grade breakdown, last actual graded review, enabled state and next schedule. Includes retired rows with retained history. Filter to a topic outline with root_rem_id. Follow next_cursor with the same arguments; a changed database requires restarting. Includes period/lifetime recorded timing totals, medians, quartiles, quality counts and timing by rating. Optional max_review_seconds adds filtered alongside unfiltered statistics. Does not expose note text or raw history.',inputSchema:{type:'object',additionalProperties:false,properties:{...properties,limit:{type:'integer',minimum:1,maximum:100,default:50},cursor:{type:'string',maxLength:2048}},required:['timezone']},annotations},
 ];
 export const grades = new Map([[0,'again'],[0.5,'hard'],[1,'good'],[1.5,'easy']]);
 export const otherScores = new Map([[0.01,'skips'],[2,'leech_views'],[3,'resets'],[4,'manual_dates'],[5,'manual_ease']]);
@@ -39,6 +41,7 @@ export function addEvent(count,event){
   return true;
 }
 export function configuration(db,args,now){
+  validateTiming(args);
   if(typeof args.timezone!=='string'||args.timezone.length>100)throw new TypeError('A valid IANA timezone is required.');
   try{new Intl.DateTimeFormat('en',{timeZone:args.timezone});}catch{throw new TypeError('Invalid IANA timezone.');}
   let hour=args.day_start_hour;
@@ -77,21 +80,22 @@ export function createWorkloadService(repository,run,verifyAdapter){
         const rows=readRows(db,config.root_rem_id);
         const snapshot=hash([config,rows]);
         if(cursor&&cursor.snapshot!==snapshot)throw new Error('Review data changed between pages. Restart without cursor.');
-        const total=counter(),daily=new Map(),uniqueCards=new Set(),uniqueRems=new Set();
+        const total=counter(),totalTiming=timingAccumulator(args),daily=new Map(),uniqueCards=new Set(),uniqueRems=new Set();
         const days=(Date.parse(config.end_date)-Date.parse(config.start_date))/86400000+1;
-        for(let i=0,day=config.start_date;i<days;i++){daily.set(day,{date:day,...counter(),cards:new Set(),rems:new Set()});if(i+1<days)day=increment(day);}
+        for(let i=0,day=config.start_date;i<days;i++){daily.set(day,{date:day,...counter(),timingAccumulator:timingAccumulator(args),cards:new Set(),rems:new Set()});if(i+1<days)day=increment(day);}
         const inventory={stored_card_rows:rows.length,current_cards:0,retired_cards:0,orphaned_cards:0,enabled_cards:0,disabled_cards:0,edit_later_cards:0,never_graded_cards:0,enabled_never_graded_cards:0,enabled_scheduled_at_or_before_now:0,enabled_scheduled_later:0,enabled_schedule_unknown:0};
         let invalidEvents=0;const items=[];
         for(const row of rows){
           const card=JSON.parse(row.card_doc),rem=row.rem_doc?JSON.parse(row.rem_doc):null;
           if(card.h!==undefined&&!Array.isArray(card.h))throw new Error('Unsupported review-history shape.');
-          const lifetime=counter(),period=counter();let last=null,bad=0;
+          const lifetime=counter(),period=counter(),lifetimeTiming=timingAccumulator(args),periodTiming=timingAccumulator(args);let last=null,bad=0;
           for(const event of card.h??[]){
             if(!event||typeof event.score!=='number'||!Number.isFinite(event.date)||event.date<0||event.date>now){bad++;continue;}
-            const graded=addEvent(lifetime,event);if(graded)last=last===null?event.date:Math.max(last,event.date);
+            const graded=addEvent(lifetime,event);if(paged)lifetimeTiming.add(event);if(graded)last=last===null?event.date:Math.max(last,event.date);
             const date=studyDate(event.date,config.timezone,config.day_start_hour,formatter),day=daily.get(date);
             if(!day||event.date>now)continue;
             addEvent(period,event);addEvent(total,event);addEvent(day,event);
+            periodTiming.add(event);totalTiming.add(event);day.timingAccumulator.add(event);
             if(graded){uniqueCards.add(row.card_id);if(row.rem_id)uniqueRems.add(row.rem_id);day.cards.add(row.card_id);if(row.rem_id)day.rems.add(row.rem_id);}
           }
           invalidEvents+=bad;
@@ -106,15 +110,15 @@ export function createWorkloadService(repository,run,verifyAdapter){
             if(!lifetime.graded_reviews){inventory.never_graded_cards++;if(enabled)inventory.enabled_never_graded_cards++;}
             if(enabled){if(!Number.isFinite(card.a))inventory.enabled_schedule_unknown++;else if(card.a<=now)inventory.enabled_scheduled_at_or_before_now++;else inventory.enabled_scheduled_later++;}
           }
-          if(paged&&(!cursor||row.card_id>cursor.after)&&items.length<(args.limit??50))items.push({card_id:row.card_id,rem_id:card.rId??null,card_type:card.c==='f'?'forward':card.c==='b'?'backward':card.c??null,enabled,edit_later:editLater,retired,orphaned:!rem,period,lifetime,last_graded_review_at:last===null?null:new Date(last).toISOString(),next_scheduled_at:Number.isFinite(card.n)&&Math.abs(card.n)<=8640000000000000?new Date(card.n).toISOString():null,invalid_history_events:bad});
+          if(paged&&(!cursor||row.card_id>cursor.after)&&items.length<(args.limit??50))items.push({card_id:row.card_id,rem_id:card.rId??null,card_type:card.c==='f'?'forward':card.c==='b'?'backward':card.c??null,enabled,edit_later:editLater,retired,orphaned:!rem,period,lifetime,timing:{period:periodTiming.result(),lifetime:lifetimeTiming.result()},last_graded_review_at:last===null?null:new Date(last).toISOString(),next_scheduled_at:Number.isFinite(card.n)&&Math.abs(card.n)<=8640000000000000?new Date(card.n).toISOString():null,invalid_history_events:bad});
         }
         const coverage={source:'Read-only snapshot of the configured local synced knowledge base.',history:'All retained cards rows, including retired and orphaned cards. Deleted/purged cards and undone or missing history cannot be recovered. Counts are retained history, not an all-time audit.',scope:'Current parent-linked outline only; tags, portals and historical topic membership are not expanded.',schedule:'Enabled ignores deck pausing. Schedule candidates use stored active-next-time <= now; they are not the native queue, daily limits, priorities or learn-ahead workload.',invalid_history_events:invalidEvents,complete_retained_history:invalidEvents===0};
-        const result={as_of:new Date(now).toISOString(),period:config,adapter:STATUS_ADAPTER,coverage};
+        const result={as_of:new Date(now).toISOString(),period:config,adapter:STATUS_ADAPTER,coverage,timing_semantics:timingSemantics};
         if(paged){
           const more=items.length>0&&rows.some(r=>r.card_id>items.at(-1).card_id);
           return {...result,items,total:rows.length,count:items.length,has_more:more,next_cursor:more?Buffer.from(JSON.stringify({after:items.at(-1).card_id,snapshot,now,query:hash({...args,cursor:undefined,limit:undefined})})).toString('base64url'):null};
         }
-        return {...result,inventory,reviews:{...total,distinct_cards_reviewed:uniqueCards.size,distinct_rems_reviewed:uniqueRems.size},daily:[...daily.values()].map(({cards,rems,...day})=>({...day,distinct_cards_reviewed:cards.size,distinct_rems_reviewed:rems.size}))};
+        return {...result,inventory,timing:totalTiming.result(),reviews:{...total,distinct_cards_reviewed:uniqueCards.size,distinct_rems_reviewed:uniqueRems.size},daily:[...daily.values()].map(({cards,rems,timingAccumulator,...day})=>({...day,timing:timingAccumulator.result(),distinct_cards_reviewed:cards.size,distinct_rems_reviewed:rems.size}))};
       }finally{db.exec('COMMIT');}
     });
   }

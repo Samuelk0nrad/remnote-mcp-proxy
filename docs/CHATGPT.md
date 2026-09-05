@@ -130,3 +130,7 @@ Review counts and schedule candidates answer different questions. ChatGPT should
 Proxy 0.5.0 adds `get_card_review_history`, `get_review_difficulty_trends`, `compare_study_topics`, and `get_study_workload_forecast`. Refresh the catalog after updating. These work with any subject or material. Timeline defaults to 30 study dates; trends and comparisons default to 14. Ask for a particular range when that distinction matters. See the [rating definitions, sample-size rules and forecast limitations](../README.md#review-timeline-and-difficulty-patterns).
 
 Proxy 0.5.1 corrects child-answer detection in `read_flashcard` without adding tools (the catalog remains 37). Refresh the catalog to load the updated description. Ask ChatGPT to inspect `answer_items` and `answer_inspection` before treating an empty inline back as a missing answer. Marked child answers are included in revision checks; they cannot be flattened through the basic-card updater. This read does not verify the rendered practice screen. See [supported cards and editing limits](../README.md#supported-cards-and-editing-limits).
+
+### Timing analytics
+
+Proxy 0.6.0 extends five existing analytics tools with recorded timing data. Refresh the catalog to load their updated descriptions and optional `max_review_seconds` parameter; there are still 37 tools. No duration cutoff is applied unless the agent supplies one. Ask for raw and filtered results, excluded review counts/time, median and quartiles, and timing by rating. A long review does not prove a pause. See the [timing reference](TIMING.md).

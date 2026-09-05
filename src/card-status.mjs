@@ -1,7 +1,7 @@
 import { open, stat } from 'node:fs/promises';
 import { plainText, strictArgs } from './flashcards.mjs';
 
-export const STATUS_ADAPTER = { app_version: '1.28.0', bundle: 'heavy-worker-startup.8b0971c091023ef9.bundle.js' };
+export const STATUS_ADAPTER = { app_version: '1.28.0', bundle: 'heavy-worker-startup.8b0971c091023ef9.bundle.js', timing_bundle:'45827.acbbdf059c097136.bundle.js', multiline_timing_bundle:'33576.e51ae303fd1d87e4.bundle.js' };
 const STATUS_NAMES = ['leech', 'struggling', 'disabled', 'enabled', 'edit_later', 'new', 'not_yet_learned', 'stale'];
 const POWERUPS = { l:'Aliases', a:'Auto Sort', at:'Applied Templates', m:'Auto Template', c:'Custom CSS', d:'Daily Document', u:'Disable Cards', dv:'Divider', o:'Document', s:'Document Sidebar', e:'Edit Later', j:'Emoji', x:'Extra Card Detail', r:'Header', h:'Highlight', b:'Link', i:'List', mc:'Multiple Choice', w:'Multiline Card', pn:'PDF Page Number', n:'PDF Highlight', q:'Quick Add', qt:'Quote', rt:'Restored from Trash', y:'Slot', os:'Sources', k:'Super Private', toc:'Table of Contents', tts:'Text to Speech', ew:'Embed Website', g:'Used as Tag', t:'Todo', f:'Uploaded File', p:'Web Highlight', z:'Website', cd:'Code', ty:'Type in Answer', de:'Deck', sp:'Search Portal', ct:'Collection', hh:'HTML Highlight', ha:'Hide Queue Ancestors', id:'Imported Document', im:'Image', sd:'Saved Documents', clo:'Callout' };
 const readOnly = { readOnlyHint:true, destructiveHint:false, idempotentHint:true, openWorldHint:false };
@@ -77,7 +77,7 @@ export function createAdapterVerifier(asarPath) {
       const bytes = Buffer.alloc(length);await file.read(bytes,0,length,16);
       const header = JSON.parse(bytes.toString());
       const entry = header.files?.['package.json'];
-      if (!entry || entry.size > 100_000 || !header.files?.build?.files?.js?.files?.[STATUS_ADAPTER.bundle]) throw new Error('RemNote app changed; its card-label adapter must be reviewed.');
+      if (!entry || entry.size > 100_000 || ![STATUS_ADAPTER.bundle,STATUS_ADAPTER.timing_bundle,STATUS_ADAPTER.multiline_timing_bundle].every(name=>header.files?.build?.files?.js?.files?.[name])) throw new Error('RemNote app changed; its card-label adapter must be reviewed.');
       const pkg = Buffer.alloc(entry.size);await file.read(pkg,0,pkg.length,8+prefix.readUInt32LE(4)+Number(entry.offset));
       if (JSON.parse(pkg.toString()).version !== STATUS_ADAPTER.app_version) throw new Error('RemNote version changed; its card-label adapter must be reviewed.');
       signature = next;
