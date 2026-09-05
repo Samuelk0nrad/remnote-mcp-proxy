@@ -16,6 +16,10 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 | Keep a correct item unchanged | `keep_edit_later_item` | Clears Edit Later after an explicit review, with content and feedback checks. |
 | Summarize study workload | `get_study_workload` | Graded reviews, daily totals and inventory for a knowledge base or topic outline. |
 | Inspect review frequency | `list_card_review_stats` | Paginated per-card period and retained lifetime review counts. |
+| See individual review choices | `get_card_review_history` | Chronological ratings and timestamps, with separate administrative events. |
+| Find difficulty patterns | `get_review_difficulty_trends` | Rating-share comparisons with sample sizes, reset warnings and long-gap evidence. |
+| Compare topic outlines | `compare_study_topics` | Selected topics in one snapshot, with overlap warnings. |
+| Inspect upcoming schedules | `get_study_workload_forecast` | Changeable next-schedule candidates by study date. |
 | Inspect labels and tags | `get_card_status` | Returns per-card labels, direct built-in powerups and direct tags. |
 | Find cards by label | `list_cards_by_status` | Searches supported status labels with pagination. |
 | Delete an individual Rem | `delete_rem` | Requires a fresh revision; refuses documents and folders. |
@@ -181,6 +185,44 @@ Topic scope follows current parent links, including the root. It does not expand
 
 Enabled cards and stored schedule candidates do not account for deck pausing, priorities, daily limits or learn-ahead rules. Do not present candidate counts as RemNote's exact remaining workload. Set `include_live_queue: true` to also request the SDK's **currently open queue** count; this is separate from the date/topic summary and can be unavailable outside practice. A zero outside a queue does not prove that no cards are due.
 
+### Review timeline and difficulty patterns
+
+All analytics are subject-independent. Select any Rem, document or outline; there are no subject names, exam rubrics or material-specific rules in the implementation.
+
+`get_card_review_history` takes `rem_id` and `timezone`, with an optional `card_id` to select one practice direction. It defaults to the last **30 study dates**, including today. Each result includes the timestamp, study date, rating, regular/cram/unknown mode, external-import flag and event type. Resets, skips and other administrative events remain identifiable. Stored history indices are only stable within that snapshot. No typed answers, note text or raw event metadata are returned.
+
+`get_review_difficulty_trends` defaults to the last **14 study dates** and accepts the same date/timezone/outline options as the workload summary. It splits the period into an earlier and a recent window (the recent window gets the extra day if the number is odd). For each card with grades or resets in the selected period, it returns:
+
+- Counts and Again / Good-or-Easy shares for both windows. Zero-review shares are `null`.
+- A lower, higher or similar Again-share label only when both windows contain at least `min_reviews` grades (default 3). The difference threshold is 20 percentage points. Resets in the period or invalid retained history suppress directional labels.
+- A `repeated_again` flag after `again_threshold` Again grades (default 3). This is a descriptive proxy heuristic, not RemNote's native Leech label.
+- Evidence of an Again grade following a Good/Easy grade after at least `long_gap_days` elapsed 24-hour days (default 7). A reset breaks the sequence; intervening grades, including filtered-out cram grades, prevent a false long gap.
+
+These patterns describe recorded ratings, not mastery, retention probabilities or why a card was difficult. Small samples, partial study days and differences in practice mode can change the interpretation. Retired cards with retained history are included and labelled.
+
+```json
+{
+  "timezone": "Europe/Vienna",
+  "root_rem_id": "YOUR_TOPIC_REM_ID",
+  "start_date": "2026-09-01",
+  "end_date": "2026-09-14",
+  "review_mode": "regular",
+  "include_external": false,
+  "min_reviews": 5,
+  "limit": 50
+}
+```
+
+Timeline, trends and topic comparison accept `review_mode` (`all`, `regular`, `cram`; default `all`) and `include_external` (default `true`). These filters affect grades; administrative events remain visible so resets are not hidden. Unknown practice modes count only in `all`. Per-card timeline and trend results are paginated. Repeat the same filters with `next_cursor`; restart if the data changes.
+
+### Compare topics and inspect future schedules
+
+`compare_study_topics` takes `timezone` and `root_rem_ids` with **2 to 10 distinct Rem IDs**, plus optional date and review filters. It defaults to the last 14 study dates. Each outline is evaluated independently in one database snapshot, returning review attempts, distinct cards studied, Again share and current enabled/never-graded inventory. Overlap is counted and flagged: do not add nested topics together. Never-graded inventory uses retained lifetime history regardless of the selected period or grade filters. Enabled inventory ignores deck pausing.
+
+`get_study_workload_forecast` takes `timezone`, optional `root_rem_id` and `day_start_hour`, and `days` (default 7, maximum 90). It separates overdue or scheduled-now candidates from future daily buckets, beginning with the current study date. Each enabled card contributes **one current next schedule**, with later and unknown schedules reported separately.
+
+This forecast is a schedule snapshot, not a prediction of total future reviews. Practicing a card may reschedule it or create more attempts. Pausing, daily limits, priorities and learn-ahead are not modeled. Use the optional live queue field of `get_study_workload` for the current SDK queue instead.
+
 ## Validation
 
 The [Tests workflow](https://github.com/Samuelk0nrad/remnote-mcp-proxy/actions/workflows/tests.yml) runs the unit suite on pushes to `main`, pull requests, and manual dispatch. It uses Node.js 24 and needs no RemNote credentials. Run the same suite locally:
@@ -189,7 +231,7 @@ The [Tests workflow](https://github.com/Samuelk0nrad/remnote-mcp-proxy/actions/w
 npm test
 ```
 
-Three additional checks require a configured installation:
+Four additional checks require a configured installation:
 
 ```sh
 # Read-only comparison with the pinned app's native label logic.
@@ -197,6 +239,9 @@ REMNOTE_DB=/absolute/path/to/remnote.db node scripts/verify-status.mjs
 
 # Read-only comparison with the pinned app's actual graded-review predicate.
 REMNOTE_DB=/absolute/path/to/remnote.db node scripts/verify-workload.mjs
+
+# Read-only timeline, topic comparison, trend and forecast checks.
+REMNOTE_DB=/absolute/path/to/remnote.db node scripts/verify-analytics.mjs
 
 # Exercise the running proxy using temporary test notes.
 REMNOTE_DB=/absolute/path/to/remnote.db \

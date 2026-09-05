@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { strictArgs } from './flashcards.mjs';
 import { STATUS_ADAPTER } from './card-status.mjs';
 
-const properties = {
+export const properties = {
   timezone:{type:'string',maxLength:100,description:'IANA timezone, e.g. Europe/Vienna. Required; never assume the server timezone.'},
   start_date:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$',description:'First study date, inclusive. Defaults to the current study date in timezone.'},
   end_date:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$',description:'Last study date, inclusive. Defaults to start_date. Maximum 366 days.'},
@@ -14,13 +14,13 @@ export const WORKLOAD_TOOLS=[
   {name:'get_study_workload',description:'Summarize actual graded reviews, distinct practice cards and Rems studied, daily activity, enabled/disabled/Edit Later cards, and stored schedule candidates for a knowledge base or topic outline. Skips, leech views, resets and manual scheduling events are separate from reviews. Retained retired-card history is included; deleted/purged history is unavailable. Stored schedule candidates are NOT the native queue. Requires timezone; dates default to today. Read-only.',inputSchema:{type:'object',additionalProperties:false,properties:{...properties,include_live_queue:{type:'boolean',default:false,description:'Also read the currently open SDK review queue. Global session only, unrelated to root_rem_id; may be unavailable outside practice.'}},required:['timezone']},annotations},
   {name:'list_card_review_stats',description:'Inspect how often individual practice cards were reviewed: period and retained lifetime graded counts, grade breakdown, last actual graded review, enabled state and next schedule. Includes retired rows with retained history. Filter to a topic outline with root_rem_id. Follow next_cursor with the same arguments; a changed database requires restarting. Does not expose note text or raw history.',inputSchema:{type:'object',additionalProperties:false,properties:{...properties,limit:{type:'integer',minimum:1,maximum:100,default:50},cursor:{type:'string',maxLength:2048}},required:['timezone']},annotations},
 ];
-const grades = new Map([[0,'again'],[0.5,'hard'],[1,'good'],[1.5,'easy']]);
-const otherScores = new Map([[0.01,'skips'],[2,'leech_views'],[3,'resets'],[4,'manual_dates'],[5,'manual_ease']]);
+export const grades = new Map([[0,'again'],[0.5,'hard'],[1,'good'],[1.5,'easy']]);
+export const otherScores = new Map([[0.01,'skips'],[2,'leech_views'],[3,'resets'],[4,'manual_dates'],[5,'manual_ease']]);
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const dateValid=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
 const increment=s=>new Date(Date.parse(s)+86400000).toISOString().slice(0,10);
-function counter(){return {graded_reviews:0,again:0,hard:0,good:0,easy:0,cram_reviews:0,non_cram_reviews:0,cram_mode_unknown:0,externally_added_reviews:0,partial_multiline_reviews:0,skips:0,leech_views:0,resets:0,manual_dates:0,manual_ease:0,unknown_events:0,simulated_events:0};}
-function dateFormatter(timezone) { return new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}); }
+export function counter(){return {graded_reviews:0,again:0,hard:0,good:0,easy:0,cram_reviews:0,non_cram_reviews:0,cram_mode_unknown:0,externally_added_reviews:0,partial_multiline_reviews:0,skips:0,leech_views:0,resets:0,manual_dates:0,manual_ease:0,unknown_events:0,simulated_events:0};}
+export function dateFormatter(timezone) { return new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}); }
 export function studyDate(timestamp, timezone, hour, formatter=dateFormatter(timezone)) {
   const parts=Object.fromEntries(formatter.formatToParts(timestamp).map(p=>[p.type,p.value]));
   const date=`${parts.year}-${parts.month}-${parts.day}`;
@@ -38,7 +38,7 @@ export function addEvent(count,event){
   if(event.isFullMultiLineRep===false)count.partial_multiline_reviews++;
   return true;
 }
-function configuration(db,args,now){
+export function configuration(db,args,now){
   if(typeof args.timezone!=='string'||args.timezone.length>100)throw new TypeError('A valid IANA timezone is required.');
   try{new Intl.DateTimeFormat('en',{timeZone:args.timezone});}catch{throw new TypeError('Invalid IANA timezone.');}
   let hour=args.day_start_hour;
@@ -53,6 +53,15 @@ function configuration(db,args,now){
   if(args.root_rem_id!==undefined&&(typeof args.root_rem_id!=='string'||!/^[A-Za-z0-9_-]{3,128}$/.test(args.root_rem_id)))throw new TypeError('Invalid root_rem_id.');
   return {start_date:start,end_date:end,timezone:args.timezone,day_start_hour:hour,root_rem_id:args.root_rem_id??null};
 }
+export function readRows(db,root){
+  if(root&&!db.prepare('SELECT 1 FROM quanta WHERE _id=?').get(root))throw new Error('Topic Rem is missing in the synced database.');
+  const rows=db.prepare(`WITH RECURSIVE scope(id) AS (
+    SELECT _id FROM quanta WHERE _id=? UNION SELECT q._id FROM quanta q JOIN scope s ON json_extract(q.doc,'$.parent')=s.id
+  ) SELECT c._id AS card_id,c.doc AS card_doc,r._id AS rem_id,r.doc AS rem_doc
+  FROM cards c LEFT JOIN quanta r ON json_extract(c.doc,'$.rId')=r._id
+  WHERE (? IS NULL OR r._id IN (SELECT id FROM scope)) ORDER BY c._id`).all(root,root);
+  return rows;
+}
 export function createWorkloadService(repository,run,verifyAdapter){
   function scan(args,paged){
     let cursor;
@@ -65,12 +74,7 @@ export function createWorkloadService(repository,run,verifyAdapter){
       db.exec('BEGIN');
       try{
         const now=cursor?.now??Date.now(),config=configuration(db,args,now),formatter=dateFormatter(config.timezone);
-        if(config.root_rem_id&&!db.prepare('SELECT 1 FROM quanta WHERE _id=?').get(config.root_rem_id))throw new Error('Topic Rem is missing in the synced database.');
-        const rows=db.prepare(`WITH RECURSIVE scope(id) AS (
-          SELECT _id FROM quanta WHERE _id=? UNION SELECT q._id FROM quanta q JOIN scope s ON json_extract(q.doc,'$.parent')=s.id
-        ) SELECT c._id AS card_id,c.doc AS card_doc,r._id AS rem_id,r.doc AS rem_doc
-        FROM cards c LEFT JOIN quanta r ON json_extract(c.doc,'$.rId')=r._id
-        WHERE (? IS NULL OR r._id IN (SELECT id FROM scope)) ORDER BY c._id`).all(config.root_rem_id,config.root_rem_id);
+        const rows=readRows(db,config.root_rem_id);
         const snapshot=hash([config,rows]);
         if(cursor&&cursor.snapshot!==snapshot)throw new Error('Review data changed between pages. Restart without cursor.');
         const total=counter(),daily=new Map(),uniqueCards=new Set(),uniqueRems=new Set();

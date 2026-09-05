@@ -126,3 +126,5 @@ After updating to proxy 0.4.0, refresh the catalog to discover `keep_edit_later_
 Try asking ChatGPT to summarize today's graded reviews in your timezone, compare the outlines of two topic documents, or show how often individual cards were reviewed. For an already correct Edit Later item, it should read the content and feedback, explain its assessment, then use the unchanged-review tool with both fresh revisions. A no-op text update still does not issue a correction token.
 
 Review counts and schedule candidates answer different questions. ChatGPT should retain the response's coverage limits and avoid calling stored schedule candidates the exact RemNote queue.
+
+Proxy 0.5.0 adds `get_card_review_history`, `get_review_difficulty_trends`, `compare_study_topics`, and `get_study_workload_forecast`. Refresh the catalog after updating. These work with any subject or material. Timeline defaults to 30 study dates; trends and comparisons default to 14. Ask for a particular range when that distinction matters. See the [rating definitions, sample-size rules and forecast limitations](../README.md#review-timeline-and-difficulty-patterns).

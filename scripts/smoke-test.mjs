@@ -58,6 +58,10 @@ try{
  const keepAfter=await call('read_flashcard',{rem_id:keepId});
  assert.deepEqual(keepAfter.front_rich_text,keepBefore.front_rich_text);assert.deepEqual(keepAfter.back_rich_text,keepBefore.back_rich_text);assert.deepEqual(keepAfter.cards,keepBefore.cards);
  assert.equal((await runtime('remnote_rem',{operation:'has_powerup',remId:keepId,powerupCode:'e'})).hasPowerup,false);
+ const timeline=await call('get_card_review_history',{timezone:'UTC',rem_id:keepId});assert.equal(timeline.total,0);
+ const trend=await call('get_review_difficulty_trends',{timezone:'UTC',root_rem_id:keepId});assert.equal(trend.total,0);
+ const comparison=await call('compare_study_topics',{timezone:'UTC',root_rem_ids:[id,keepId]});assert.equal(comparison.topics.length,2);assert.ok(comparison.topics.every(topic=>topic.reviews.graded_reviews===0));
+ const forecast=await call('get_study_workload_forecast',{timezone:'UTC',root_rem_id:keepId,days:7});assert.equal(forecast.daily.length,7);results.review_analytics=true;
  results.keep_unchanged=true;await remove(keepId);
  const workload=await call('get_study_workload',{timezone:'UTC',root_rem_id:id});assert.equal(workload.inventory.current_cards,1);assert.equal(workload.reviews.graded_reviews,0);
  const stats=await call('list_card_review_stats',{timezone:'UTC',root_rem_id:id});assert.equal(stats.total,1);assert.equal(stats.items[0].lifetime.graded_reviews,0);results.workload_tools=true;

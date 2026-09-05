@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { ANALYTICS_TOOLS, createReviewAnalytics } from './review-analytics.mjs';
 import { WORKLOAD_TOOLS, createWorkloadService } from './workload.mjs';
 import { STATUS_TOOLS, createStatusService, createAdapterVerifier } from './card-status.mjs';
 import { FLASHCARD_TOOLS, createFlashcardService, strictArgs } from './flashcards.mjs';
@@ -45,6 +46,7 @@ const EXTRA_TOOLS = [
   ...FLASHCARD_TOOLS,
   ...STATUS_TOOLS,
   ...WORKLOAD_TOOLS,
+  ...ANALYTICS_TOOLS,
 ];
 
 function asBoolean(value) {
@@ -393,6 +395,7 @@ export function createMcpHandler({
   const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken);
   const status = createStatusService(repository, runtimeMcpRunner, verifyStatusAdapter);
   const workload = createWorkloadService(repository, runtimeMcpRunner, verifyStatusAdapter);
+  const analytics = createReviewAnalytics(repository, verifyStatusAdapter);
   return async function handler(request, response) {
     if (request.url !== '/mcp') {
       response.writeHead(404).end('Not found');
@@ -464,7 +467,15 @@ export function createMcpHandler({
         }
 
         let payload;
-        if (name === 'get_study_workload') {
+        if (name === 'get_card_review_history') {
+          payload = await analytics.timeline(args);
+        } else if (name === 'get_review_difficulty_trends') {
+          payload = await analytics.trends(args);
+        } else if (name === 'compare_study_topics') {
+          payload = await analytics.compare(args);
+        } else if (name === 'get_study_workload_forecast') {
+          payload = await analytics.forecast(args);
+        } else if (name === 'get_study_workload') {
           payload = await workload.summary(args);
         } else if (name === 'list_card_review_stats') {
           payload = await workload.list(args);
