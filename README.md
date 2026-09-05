@@ -11,7 +11,7 @@ This proxy preserves RemNote Desktop's built-in MCP tools and adds safe flashcar
 
 `update_rem_front` explicitly edits only a Rem's stored front/text. `update_rem` remains a compatibility entry point but requires a revision and refuses flashcards. Old clients that send whole cards through `text` receive an actionable error instead of corrupting the front. No-op updates do not issue correction tokens.
 
-Basic forward and backward cards are supported. Bidirectional basic cards retain both practice-card IDs. Cloze, multiline and other card types are deliberately refused until their structures have dedicated editing support. Reading them remains supported when the SDK returns complete metadata. Stored front/back are not the rendered question/answer of a backward card.
+Basic forward and backward cards are supported. Persisted card IDs are also read through the SDK because its ordinary card-list operation omits cards held in Edit Later. Bidirectional basic cards retain both practice-card IDs. Cloze, multiline and other card types are deliberately refused until their structures have dedicated editing support. Reading them remains supported when the SDK returns complete metadata. Stored front/back are not the rendered question/answer of a backward card.
 
 ## Safety and limits
 
@@ -37,6 +37,8 @@ Defaults: proxy `127.0.0.1:7789`, built-in MCP `http://127.0.0.1:7788/mcp`, Agen
 The proxy reads authentication from the RemNote config and runtime auth files under the service user's home. Optional overrides are `REMNOTE_MCP_TOKEN`, `REMNOTE_AGENT_TOKEN`, `REMNOTE_CONFIG_PATH`, and `REMNOTE_AGENT_AUTH_PATH`. Never put credentials in Git.
 
 ## Git and deployment
+
+Local source checkout: `/home/remnote/remnote/remnote-mcp-proxy`. The `AGENTS.md` in that repository requires completed changes and deployment checkpoints to be committed.
 
 Server: Example server (`192.0.2.10`), `/opt/remnote-mcp-proxy`, owned by `remnote`; service `remnote-mcp-proxy.service`.
 
