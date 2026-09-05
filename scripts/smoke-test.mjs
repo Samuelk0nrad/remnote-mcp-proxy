@@ -21,6 +21,7 @@ async function call(name,args){
   {writeHead(){return this;},end(value){result=JSON.parse(value);}});
  }
  if(result.error)throw new Error(result.error.data?.message??result.error.message);
+ if(result.result?.isError || !result.result?.structuredContent)throw new Error(`Tool ${name} is unavailable or did not return a structured result.`);
  return result.result.structuredContent;
 }
 const created=new Set();
