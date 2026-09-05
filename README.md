@@ -8,6 +8,7 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 
 | Task | Tool | Behavior |
 | --- | --- | --- |
+| Move existing cards | `move_flashcards` | Exact placement with fresh revisions; preserves content, child structure, practice IDs and retained history. |
 | Search and rank cards | `list_flashcards` | One question per result, full-topic filtering/sorting, content, dates, labels, review metrics and pagination. |
 | Create cards inside a topic | `create_flashcards` | Basic or multiline, explicit placement and direction, verified SDK writes and durable retry protection. |
 | Inspect a card before editing | `read_flashcard` | Returns inline front/back, marked child answers, rich text, card IDs, direction and a revision. |
@@ -86,7 +87,11 @@ Here, `~` means the home directory of the user running the proxy. Keep tokens an
 
 ## Create flashcards inside a topic
 
-Use `create_flashcards` after reading the topic outline and selecting the exact parent heading. Version 0.8.0 adds this tool, bringing that version’s catalog to 38. Version 0.9.0 adds `list_flashcards` for a total of 39. Basic cards use separate literal front/back strings; multiline cards use `back.items`. Both support forward, backward or both directions. Placement is start/end or before/after an existing direct sibling. Optional source notes stay unmarked. See the [creation guide](docs/CREATION.md) for examples, limits and retry recovery.
+Use `create_flashcards` after reading the topic outline and selecting the exact parent heading. Version 0.8.0 adds this tool, bringing that version’s catalog to 38. Version 0.9.0 adds `list_flashcards` for 39 tools; 0.10.0 adds moving for a total of 40. Basic cards use separate literal front/back strings; multiline cards use `back.items`. Both support forward, backward or both directions. Placement is start/end or before/after an existing direct sibling. Optional source notes stay unmarked. See the [creation guide](docs/CREATION.md) for examples, limits and retry recovery.
+
+## Move existing flashcards
+
+Use `move_flashcards` to relocate existing questions and their child answers/context without recreating them. Read every source and the destination first, supply their revisions, and choose exact sibling placement. The tool verifies source/destination order, content, practice-card identities and retained history. See the [move guide](docs/MOVING.md) for examples, limits and uncertain-outcome recovery.
 
 ## Edit a flashcard
 

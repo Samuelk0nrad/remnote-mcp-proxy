@@ -80,4 +80,6 @@ Version 0.8.0 needs a writable, persistent proxy-owned SQLite journal for creati
 
 Keep the journal through service restarts, upgrades and code rollbacks. Back it up using SQLite's backup facility (or while the proxy is stopped). Restoring an older journal can lose completed-request receipts and allow duplicate creation; reconcile requests before accepting retries after such a restore. The journal does not back up note content.
 
-After deploying, run the existing smoke test and `REMNOTE_DB=/absolute/path/to/remnote.db MCP_PROXY_URL=http://127.0.0.1:7789/mcp node scripts/smoke-create-flashcards.mjs`. The latter creates and removes only its own temporary fixtures. Verify the 38-tool catalog, then refresh the client with the user's approval.
+After deploying, run the existing smoke test and `REMNOTE_DB=/absolute/path/to/remnote.db MCP_PROXY_URL=http://127.0.0.1:7789/mcp node scripts/smoke-create-flashcards.mjs`. The latter creates and removes only its own temporary fixtures. Verify the current catalog (40 tools in 0.10.0), then refresh the client with the user's approval.
+
+The same persistent journal also protects `move_flashcards` retries under a separate request namespace. For 0.10.0, additionally run `scripts/smoke-move-flashcards.mjs` with the same database/proxy environment. It relocates only its own temporary fixtures and verifies cleanup. Keep distinct Git checkpoints for creation, listing and moving if deploying incrementally.

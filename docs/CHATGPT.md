@@ -146,3 +146,8 @@ Proxy 0.8.0 adds `create_flashcards`; refresh the catalog to load all 38 tools. 
 ### Searching and ranking flashcards
 
 Proxy 0.9.0 adds `list_flashcards` (39 tools). Refresh the catalog to load it. Ask for cards within a selected topic, with explicit filters and sort metrics; the tool searches full stored content and ranks all matches before pagination. A result groups practice directions under one question. Dates and thresholds are explicit, and unknown timing stays null. Use `read_flashcard` before any edit. See the [listing guide](LISTING.md).
+
+
+### Moving existing flashcards
+
+Proxy 0.10.0 adds `move_flashcards` (40 tools). Refresh the catalog to load it. For relocation, ask ChatGPT to read the source cards and destination heading first, then move the existing Rem IDs with fresh revisions and explicit placement. It preserves child answers/context and checks practice-card IDs and retained history. It does not recreate cards or clear Edit Later. See the [move guide](MOVING.md).

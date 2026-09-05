@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { ANALYTICS_TOOLS, createReviewAnalytics } from './review-analytics.mjs';
 import { WORKLOAD_TOOLS, createWorkloadService } from './workload.mjs';
 import { STATUS_TOOLS, createStatusService, createAdapterVerifier } from './card-status.mjs';
+import { MOVE_FLASHCARD_TOOL, createCardMoveService } from './move-flashcards.mjs';
 import { LIST_FLASHCARD_TOOL, createFlashcardListing } from './list-flashcards.mjs';
 import { CREATE_FLASHCARD_TOOL, CreationJournal, createCardCreationService } from './create-flashcards.mjs';
 import { createHash } from 'node:crypto';
@@ -49,6 +50,7 @@ const EXTRA_TOOLS = [
   ...FLASHCARD_TOOLS,
   CREATE_FLASHCARD_TOOL,
   LIST_FLASHCARD_TOOL,
+  MOVE_FLASHCARD_TOOL,
   ...STATUS_TOOLS,
   ...WORKLOAD_TOOLS,
   ...ANALYTICS_TOOLS,
@@ -131,6 +133,20 @@ export class EditLaterRepository {
 
   cardIds(remId) {
     return this.withDatabase(db => db.prepare("SELECT _id FROM cards WHERE json_extract(doc, '$.rId') = ? ORDER BY _id LIMIT 101").all(remId).map(row => row._id));
+  }
+
+  cardHistorySnapshot(cardIds) {
+    if (!cardIds.length) return [];
+    return this.withDatabase(db => {
+      const query = db.prepare("SELECT _id, json_extract(doc, '$.h') AS history FROM cards WHERE _id = ?");
+      return [...new Set(cardIds)].sort().flatMap(id => {
+        const row = query.get(id);
+        if (!row) return [];
+        const history = JSON.parse(row.history ?? '[]');
+        if (!Array.isArray(history)) throw new Error('Unsupported stored review history.');
+        return [{ _id: row._id, history }];
+      });
+    });
   }
 
   get(id) {
@@ -399,14 +415,16 @@ export function createMcpHandler({
   verifyStatusAdapter = createAdapterVerifier(process.env.REMNOTE_APP_ASAR ?? '/opt/remnote/app/resources/app.asar'),
 }) {
   let journal = creationJournal;
-  const creation = createCardCreationService(runtimeMcpRunner, () => {
+  const getOperationJournal = () => {
     if (!journal) {
       const scope = createHash('sha256').update(process.env.REMNOTE_DB ?? 'default').digest('hex').slice(0, 16);
       journal = new CreationJournal(process.env.REMNOTE_CREATION_JOURNAL ?? path.join(os.homedir(), '.local', 'state', 'remnote-mcp-proxy', `creation-${scope}.sqlite`));
     }
     return journal;
-  });
+  };
+  const creation = createCardCreationService(runtimeMcpRunner, getOperationJournal);
   const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken);
+  const moves = createCardMoveService(runtimeMcpRunner, flashcards, repository, getOperationJournal);
   const status = createStatusService(repository, runtimeMcpRunner, verifyStatusAdapter);
   const workload = createWorkloadService(repository, runtimeMcpRunner, verifyStatusAdapter);
   const analytics = createReviewAnalytics(repository, verifyStatusAdapter);
@@ -501,6 +519,8 @@ export function createMcpHandler({
           payload = await status.get(args);
         } else if (name === 'list_cards_by_status') {
           payload = await status.list(args);
+        } else if (name === 'move_flashcards') {
+          payload = await moves.move(args);
         } else if (name === 'list_flashcards') {
           payload = await listing.list(args);
         } else if (name === 'create_flashcards') {
