@@ -322,3 +322,43 @@ test('Edit Later status includes its dormant retained practice card',async t=>{
   const service=createStatusService(repository,async()=>{},async()=>{});
   const result=await service.list({status:'edit_later'});assert.equal(result.total,1);assert.equal(result.items[0].labels.disabled,false);
 });
+
+test('keep unchanged clears only the marker and preserves structured sides',async()=>{
+  const f=fixture({text:[{text:'Question',b:true}],back:[{text:'Answer',i:true}],type:'cloze'});
+  const before=await f.service.read('testRem123');
+  const result=await f.service.keep({rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'The existing definition already answers the feedback.'});
+  assert.equal(result.kept_unchanged,true);assert.equal(f.queued,false);
+  assert.deepEqual(f.writes.map(w=>w.operation),['remove_powerup']);
+  assert.deepEqual(f.rem.text,before.front_rich_text);assert.deepEqual(f.rem.backText,before.back_rich_text);
+});
+test('keep unchanged refuses changed content, feedback, blank reason and extra arguments',async()=>{
+  for(const change of ['content','feedback','reason','extra']){
+    const f=fixture(),before=await f.service.read('testRem123');
+    const args={rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'Already correct.'};
+    if(change==='content')f.changeBack('New answer');
+    if(change==='feedback')f.changeFeedback('New feedback');
+    if(change==='reason')args.review_reason='  ';
+    if(change==='extra')args.back='Unexpected edit';
+    await assert.rejects(()=>f.service.keep(args));assert.equal(f.writes.length,0);assert.equal(f.queued,true);
+  }
+});
+test('keep unchanged detects an unconfirmed marker removal',async()=>{
+  const f=fixture();const service=createFlashcardService(async(name,args)=>args.operation==='remove_powerup'?{applied:true}:f.run(name,args),f.repository,'test-secret');
+  const before=await service.read('testRem123');
+  await assert.rejects(()=>service.keep({rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'Correct.'}),/could not be verified/);
+});
+test('keep readback tolerates its own asynchronous SQLite marker removal',async()=>{
+  const f=fixture();let clearing=false,reads=0;
+  const repository={get:()=>clearing&&++reads>1?null:f.repository.get()};
+  const service=createFlashcardService(async(name,args)=>{
+    if(args.operation==='remove_powerup'){
+      const result=await f.run(name,args);clearing=true;return result;
+    }
+    return f.run(name,args);
+  },repository,'test-secret');
+  // Emulate stale persistence on the first post-write read, then catch-up.
+  const original=repository.get;repository.get=()=>clearing&&reads===0?(reads++,{feedback_rich_text:['Too vague'],added_at:1}):original();
+  const before=await service.read('testRem123');
+  const result=await service.keep({rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'Correct.'});
+  assert.equal(result.verified,true);assert.equal(f.writes.length,1);
+});

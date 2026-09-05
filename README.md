@@ -1,6 +1,6 @@
 # RemNote MCP proxy
 
-An MCP proxy for RemNote Desktop that keeps flashcard fronts and backs separate, verifies edits, and exposes card labels such as **Leech** and **Edit Later**.
+An MCP proxy for RemNote Desktop that keeps flashcard fronts and backs separate, verifies edits, exposes card labels such as **Leech** and **Edit Later**, and summarizes study activity.
 
 The proxy forwards RemNote's built-in tools and adds guarded editing and inspection tools. It reads the local synced database in read-only mode and makes note changes through the RemNote Agent Runtime SDK.
 
@@ -13,6 +13,9 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 | Change only a Rem's front/text | `update_rem_front` | Preserves the back and card direction. |
 | Review pending corrections | `get_edit_later_queue` | Returns queued items with totals and pagination. |
 | Finish a correction | `resolve_edit_later_item` | Requires proof of a verified edit before clearing Edit Later. |
+| Keep a correct item unchanged | `keep_edit_later_item` | Clears Edit Later after an explicit review, with content and feedback checks. |
+| Summarize study workload | `get_study_workload` | Graded reviews, daily totals and inventory for a knowledge base or topic outline. |
+| Inspect review frequency | `list_card_review_stats` | Paginated per-card period and retained lifetime review counts. |
 | Inspect labels and tags | `get_card_status` | Returns per-card labels, direct built-in powerups and direct tags. |
 | Find cards by label | `list_cards_by_status` | Searches supported status labels with pagination. |
 | Delete an individual Rem | `delete_rem` | Requires a fresh revision; refuses documents and folders. |
@@ -32,7 +35,7 @@ Start with the [complete installation guide](docs/SETUP.md): obtain the compatib
 
 The database, built-in MCP endpoint and SDK runtime must all refer to the **same knowledge base**. Update the database configuration when switching knowledge bases.
 
-Card-label inspection is currently tied to **RemNote 1.28.0** and a specific installed worker bundle. If that version or bundle changes, label tools refuse to report native labels until the adapter is reviewed. This does not disable the SDK editing tools.
+Card-label and workload inspection are currently tied to **RemNote 1.28.0** and a specific installed worker bundle. If that version or bundle changes, label and workload tools refuse to report results until the adapter is reviewed. This does not disable the SDK editing tools.
 
 ## Connect to ChatGPT
 
@@ -66,7 +69,7 @@ The MCP endpoint defaults to `http://127.0.0.1:7789/mcp`. Clients must send the 
 | `REMNOTE_AGENT_AUTH_PATH` | `~/.remnote-agent/auth.json` |
 | `REMNOTE_MCP_TOKEN` | Optional override for `remNoteMcpAccessToken` in the RemNote config. |
 | `REMNOTE_AGENT_TOKEN` | Optional override for `httpToken` in the runtime auth file. |
-| `REMNOTE_APP_ASAR` | `/opt/remnote/app/resources/app.asar`; used to validate the label adapter. |
+| `REMNOTE_APP_ASAR` | `/opt/remnote/app/resources/app.asar`; used to validate the label and history adapters. |
 
 Here, `~` means the home directory of the user running the proxy. Keep tokens and personal deployment configuration outside Git.
 
@@ -109,6 +112,21 @@ The examples below show tool arguments. Replace the placeholder ID and copy the 
 
 For formatted sides or embedded references, use `front_rich_text` or `back_rich_text`. Read the existing rich-text arrays first and preserve their structured nodes and formatting. Plain-text replacement is refused when it would discard that structure.
 
+### Keep an already correct item
+
+Read the card with `read_flashcard` and assess both its content and the returned `edit_later.feedback_rich_text`. If no correction is needed, call `keep_edit_later_item`:
+
+```json
+{
+  "rem_id": "YOUR_REM_ID",
+  "expected_revision": "COPY_REVISION_FROM_READ",
+  "expected_queue_revision": "COPY_EDIT_LATER_QUEUE_REVISION_FROM_READ",
+  "review_reason": "The existing answer already explains the distinction raised in the feedback."
+}
+```
+
+This removes only the Edit Later powerup through the SDK and verifies that the stored sides and content structure remain unchanged. It works for inspected Rems without requiring a basic-card edit. The reason is returned in the response; it is not written into the note. Stale content, changed feedback or an absent queue entry require a fresh read and review. Marker removal may update RemNote timestamps and scheduling state. It does not grade the card or fabricate a correction.
+
 ### Supported cards and editing limits
 
 - Basic forward, backward and bidirectional cards are supported. Stored front/back are not necessarily the displayed question/answer of a backward practice card.
@@ -134,6 +152,35 @@ Status results reflect the local synced database. Direct tags are read through t
 
 For paginated status and queue results, follow `next_cursor` while `has_more` is true. The underlying data can change between pages; restart a scan when you need to include newly added items that sort before your cursor.
 
+## Study activity and workload
+
+`get_study_workload` defaults to the current **study date** in the required timezone. It uses RemNote's configured day-start hour (4 if unset). Set `day_start_hour: 0` for calendar-day reports.
+
+```json
+{
+  "timezone": "Europe/Vienna",
+  "start_date": "2026-09-01",
+  "end_date": "2026-09-05",
+  "day_start_hour": 4,
+  "root_rem_id": "YOUR_TOPIC_REM_ID"
+}
+```
+
+Omit `root_rem_id` for the configured knowledge base. Both dates are inclusive; the maximum range is 366 days. The response includes:
+
+- Actual graded reviews, grade breakdown, distinct practice cards and distinct existing Rems studied, plus daily totals including zero-activity days.
+- Separate counts for cram practice, externally added grades and partial multiline reviews. These are subsets of graded reviews, not additional reviews. Each outer history entry counts once regardless of subcard scores.
+- Skips, leech views, resets, manual schedule/ease changes, unknown events and simulated events, excluded from graded reviews.
+- Current enabled, disabled and Edit Later card counts, never-graded cards, and stored schedule candidates.
+
+Use `list_card_review_stats` with the same date/scope arguments to inspect individual practice cards. Its `period` counts follow the requested dates; `lifetime` counts use all retained valid history, including grades before resets. `last_graded_review_at` excludes skips and administrative events. Follow `next_cursor`; if the data changes, the tool asks you to restart the scan.
+
+These are read-only summaries of the **local synced database**, not a complete historical audit. Retained retired/orphaned card histories are included; deleted, purged or undone reviews cannot be reconstructed. Malformed or future-dated events are excluded and counted under coverage. No study-time estimate is reported because stored response times can include idle time.
+
+Topic scope follows current parent links, including the root. It does not expand tags or portals or reconstruct where a card belonged when reviewed. Run a summary for each topic you want to compare.
+
+Enabled cards and stored schedule candidates do not account for deck pausing, priorities, daily limits or learn-ahead rules. Do not present candidate counts as RemNote's exact remaining workload. Set `include_live_queue: true` to also request the SDK's **currently open queue** count; this is separate from the date/topic summary and can be unavailable outside practice. A zero outside a queue does not prove that no cards are due.
+
 ## Validation
 
 The [Tests workflow](https://github.com/Samuelk0nrad/remnote-mcp-proxy/actions/workflows/tests.yml) runs the unit suite on pushes to `main`, pull requests, and manual dispatch. It uses Node.js 24 and needs no RemNote credentials. Run the same suite locally:
@@ -142,11 +189,14 @@ The [Tests workflow](https://github.com/Samuelk0nrad/remnote-mcp-proxy/actions/w
 npm test
 ```
 
-Two additional checks require a configured installation:
+Three additional checks require a configured installation:
 
 ```sh
 # Read-only comparison with the pinned app's native label logic.
 REMNOTE_DB=/absolute/path/to/remnote.db node scripts/verify-status.mjs
+
+# Read-only comparison with the pinned app's actual graded-review predicate.
+REMNOTE_DB=/absolute/path/to/remnote.db node scripts/verify-workload.mjs
 
 # Exercise the running proxy using temporary test notes.
 REMNOTE_DB=/absolute/path/to/remnote.db \

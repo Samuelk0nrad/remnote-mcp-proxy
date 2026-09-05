@@ -49,6 +49,19 @@ try{
  await assert.rejects(()=>call('update_flashcard',{rem_id:id,expected_revision:before.revision,back:'Stale overwrite'}),/Revision conflict/);
  const resolved=await call('resolve_edit_later_item',{id,verification_token:changed.verification_token});assert.equal(resolved.verified,true);
  results.back_update_and_edit_later=true;
+ const keepId=await create('keep structured **question** >> **Correct answer**');
+ await runtime('remnote_rem',{operation:'add_powerup',remId:keepId,powerupCode:'e'});
+ for(let i=0;i<30;i++){if(new EditLaterRepository(databasePath).get(keepId))break;await new Promise(resolve=>setTimeout(resolve,100));}
+ const keepBefore=await call('read_flashcard',{rem_id:keepId});
+ const kept=await call('keep_edit_later_item',{rem_id:keepId,expected_revision:keepBefore.revision,expected_queue_revision:keepBefore.edit_later.queue_revision,review_reason:'Synthetic fixture is already correct.'});
+ assert.equal(kept.kept_unchanged,true);
+ const keepAfter=await call('read_flashcard',{rem_id:keepId});
+ assert.deepEqual(keepAfter.front_rich_text,keepBefore.front_rich_text);assert.deepEqual(keepAfter.back_rich_text,keepBefore.back_rich_text);assert.deepEqual(keepAfter.cards,keepBefore.cards);
+ assert.equal((await runtime('remnote_rem',{operation:'has_powerup',remId:keepId,powerupCode:'e'})).hasPowerup,false);
+ results.keep_unchanged=true;await remove(keepId);
+ const workload=await call('get_study_workload',{timezone:'UTC',root_rem_id:id});assert.equal(workload.inventory.current_cards,1);assert.equal(workload.reviews.graded_reviews,0);
+ const stats=await call('list_card_review_stats',{timezone:'UTC',root_rem_id:id});assert.equal(stats.total,1);assert.equal(stats.items[0].lifetime.graded_reviews,0);results.workload_tools=true;
+
  const current=await call('read_flashcard',{rem_id:id});
  await assert.rejects(()=>call('update_rem',{id,text:'Question → answer',expected_revision:current.revision}),/cannot update flashcards/);
  results.legacy_card_write_rejected=true;

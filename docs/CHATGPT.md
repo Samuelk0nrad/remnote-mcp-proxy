@@ -118,3 +118,11 @@ Restarting the server alone does not refresh the connection's saved metadata. Th
 Secure MCP Tunnel is for private connections, not public plugin distribution. OpenAI requires a stable public HTTPS MCP endpoint for public plugin submission. See the [official tunnel guidance](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
 
 The optional Cloudflare file in this repository only supplies routing. It does not adapt this proxy's static bearer authentication into ChatGPT's interactive OAuth flow. A publicly reachable URL by itself is therefore not a complete integration for this proxy. Keep the personal tunnel setup above unless you also implement and verify an appropriate authenticated public gateway.
+
+## Study and unchanged-review tools
+
+After updating to proxy 0.4.0, refresh the catalog to discover `keep_edit_later_item`, `get_study_workload`, and `list_card_review_stats`. See the [usage examples and count definitions](../README.md#study-activity-and-workload).
+
+Try asking ChatGPT to summarize today's graded reviews in your timezone, compare the outlines of two topic documents, or show how often individual cards were reviewed. For an already correct Edit Later item, it should read the content and feedback, explain its assessment, then use the unchanged-review tool with both fresh revisions. A no-op text update still does not issue a correction token.
+
+Review counts and schedule candidates answer different questions. ChatGPT should retain the response's coverage limits and avoid calling stored schedule candidates the exact RemNote queue.

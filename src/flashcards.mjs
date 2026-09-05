@@ -24,6 +24,11 @@ export const FLASHCARD_TOOLS = [
   tool('resolve_edit_later_item', 'Clear Edit Later only after a verified correction. Pass the verification_token returned by update_flashcard/update_rem_front. Rejects changed content or changed queue feedback; verifies that the marker is gone.', {
     id: idSchema, verification_token: { type: 'string', maxLength: 4096, description: 'Opaque token from the verified update response; do not invent or modify it.' },
   }, ['id', 'verification_token']),
+  tool('keep_edit_later_item', 'After reviewing the content and Edit Later feedback, keep this Rem unchanged and clear its marker. Read with read_flashcard first, then copy revision and edit_later.queue_revision. Requires an explicit review reason. Rejects stale content or feedback and verifies unchanged sides and structure. Does not edit text or rate a practice card.', {
+    rem_id: idSchema, expected_revision: revisionSchema,
+    expected_queue_revision: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Copy edit_later.queue_revision from the same fresh read_flashcard response.' },
+    review_reason: { type: 'string', minLength: 1, maxLength: 2000, description: 'Why the existing content already addresses the queued feedback. Returned to the caller, not saved in the note.' },
+  }, ['rem_id', 'expected_revision', 'expected_queue_revision', 'review_reason']),
   tool('delete_rem', 'Delete a non-document Rem by exact Rem ID after read_flashcard. Requires its current revision. Refuses unknown types, documents and folders. Refuses parents unless allow_descendants is explicitly true; that also deletes their subtree. Verifies the Rem is missing.', {
     rem_id: idSchema, expected_revision: revisionSchema,
     allow_descendants: { type: 'boolean', default: false, description: 'True explicitly authorizes deletion of this Rem AND its descendant subtree.' },
@@ -80,8 +85,10 @@ export function createFlashcardService(run, repository, tokenSecret) {
     try { return await action(); } finally { release(); if (locks.get(remId) === next) locks.delete(remId); }
   }
   const remCall = (operation, remId, more = {}) => run('remnote_rem', { operation, remId, ...more });
-  async function read(remId) {
+  async function read(remId, checkQueue = true) {
     id(remId);
+    const queue = repository.get?.(remId) ?? null;
+    const queueRevision = queueDigest(queue);
     const result = await remCall('get', remId);
     const rem = result?.rem;
     if (!rem || rem.remId !== remId || !Array.isArray(rem.text) || !Array.isArray(rem.children) || (rem.backText != null && !Array.isArray(rem.backText))) throw new Error('Runtime returned incomplete Rem content; refusing to guess.');
@@ -115,7 +122,9 @@ export function createFlashcardService(run, repository, tokenSecret) {
     // Detect a concurrent edit during the multi-call read.
     const check = (await remCall('get', remId))?.rem;
     if (!equal(rem, check)) throw new Error('Rem changed while reading; call read_flashcard again.');
+    if (checkQueue && queueVersion(remId) !== queueRevision) throw new Error('Edit Later feedback changed while reading; call read_flashcard again.');
     return { ...snapshot, front: plainText(rem.text), back: plainText(rem.backText),
+      edit_later: { queued: queue !== null, queue_revision: queueRevision, feedback_rich_text: queue?.feedback_rich_text ?? [], added_at: queue?.added_at ?? null },
       practice_direction: state.practiceDirection ?? null,
       field_semantics: 'front/back are stored Rem sides; backward practice reverses their roles. Arrows within either field are literal content.',
       revision: digest(snapshot),
@@ -127,10 +136,10 @@ export function createFlashcardService(run, repository, tokenSecret) {
     expectedRevision(revision);
     if (snapshot.revision !== revision) throw new Error('Revision conflict: the Rem changed since it was read. Read it again and reconsider the edit. No write was attempted.');
   }
-  function queueVersion(remId) {
-    const item = repository.get?.(remId);
+  function queueDigest(item) {
     return digest(item ? { added_at: item.added_at, feedback: item.feedback_rich_text } : null);
   }
+  function queueVersion(remId) { return queueDigest(repository.get?.(remId)); }
   function receipt(remId, revision, queueVersion) {
     const body = Buffer.from(JSON.stringify({ rem_id: remId, revision, queue_version: queueVersion, issued_at: Date.now() })).toString('base64url');
     return `${body}.${createHmac('sha256', tokenSecret).update(body).digest('hex')}`;
@@ -202,6 +211,27 @@ export function createFlashcardService(run, repository, tokenSecret) {
       return { ok: true, verified: true, rem_id: args.id };
     });
   }
+  async function keep(args) {
+    strictArgs(args, ['rem_id', 'expected_revision', 'expected_queue_revision', 'review_reason'], ['rem_id', 'expected_revision', 'expected_queue_revision', 'review_reason']);
+    id(args.rem_id); expectedRevision(args.expected_revision); expectedRevision(args.expected_queue_revision);
+    if (typeof args.review_reason !== 'string' || !args.review_reason.trim() || args.review_reason.length > 2000) throw new TypeError('A non-empty review_reason of at most 2000 characters is required.');
+    return locked(args.rem_id, async () => {
+      const before = await read(args.rem_id);
+      checkRevision(before, args.expected_revision);
+      if (!before.edit_later.queued || before.edit_later.queue_revision !== args.expected_queue_revision) throw new Error('Edit Later feedback changed or is absent; read the card and review its feedback again.');
+      const membership = await remCall('has_powerup', args.rem_id, { powerupCode: 'e' });
+      if (membership?.hasPowerup !== true || queueVersion(args.rem_id) !== args.expected_queue_revision) throw new Error('Edit Later membership or feedback changed; no write was attempted.');
+      requireApplied(await remCall('remove_powerup', args.rem_id, { powerupCode: 'e' }));
+      // The SDK marker write may reach SQLite during this verification read.
+      // Verify live content and membership; queue stability only guards pre-write reads.
+      const after = await read(args.rem_id, false);
+      const marker = await remCall('has_powerup', args.rem_id, { powerupCode: 'e' });
+      // Marker removal can change scheduling state and update timestamps.
+      const content = s => ({ front:s.front_rich_text, back:s.back_rich_text, has_back:s.has_back, parent:s.parent_rem_id, children:s.children, type:s.rem_type, cards:s.cards, card_structure:s.card_structure, direction:s.practice_direction });
+      if (marker?.hasPowerup !== false || !equal(content(before), content(after))) throw new Error('Marker removal was attempted but unchanged content could not be verified. Read the Rem before recovery; do not blindly retry.');
+      return { ok:true, verified:true, kept_unchanged:true, rem_id:args.rem_id, review_reason:args.review_reason.trim() };
+    });
+  }
   async function remove(args) {
     strictArgs(args, ['rem_id', 'expected_revision', 'allow_descendants'], ['rem_id', 'expected_revision']); id(args.rem_id); expectedRevision(args.expected_revision);
     if (args.allow_descendants !== undefined && typeof args.allow_descendants !== 'boolean') throw new TypeError('allow_descendants must be boolean.');
@@ -215,5 +245,5 @@ export function createFlashcardService(run, repository, tokenSecret) {
       return { ok: true, deleted: true, verified: true, rem_id: args.rem_id };
     });
   }
-  return { read, update, resolve, remove };
+  return { read, update, resolve, keep, remove };
 }
