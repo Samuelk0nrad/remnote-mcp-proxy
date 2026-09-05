@@ -12,7 +12,7 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 | Search and rank cards | `list_flashcards` | One question per result, full-topic filtering/sorting, content, dates, labels, review metrics and pagination. |
 | Create cards inside a topic | `create_flashcards` | Basic or multiline, explicit placement and direction, verified SDK writes and durable retry protection. |
 | Inspect a card before editing | `read_flashcard` | Returns inline front/back, marked child answers, rich text, card IDs, direction and a revision. |
-| Change a question or answer | `update_flashcard` | Updates each side separately and verifies the saved result. |
+| Change a question or answer | `update_flashcard` | Typed basic/multiline edits with separate sides, revision checks and preserved history/schedules. |
 | Change only a Rem's front/text | `update_rem_front` | Preserves the back and card direction. |
 | Review pending corrections | `get_edit_later_queue` | Returns queued items with totals and pagination. |
 | Finish a correction | `resolve_edit_later_item` | Requires proof of a verified edit before clearing Edit Later. |
@@ -97,6 +97,8 @@ Use `move_flashcards` to relocate existing questions and their child answers/con
 
 Use the **Rem ID**, not a practice Card ID. One Rem can produce multiple practice cards, for example when both directions are enabled.
 
+Version 0.11.0 aligns updating with creation’s `type`, `direction`, `front`, `back` and `notes` fields, including multiline `back.items`. The catalog remains at 40 tools. See the [update guide](docs/UPDATING.md) for item identity, explicit removal, retries and spaced repetition.
+
 The examples below show tool arguments. Replace the placeholder ID and copy the revision and verification token from actual responses.
 
 1. Read the card with `read_flashcard`:
@@ -111,6 +113,8 @@ The examples below show tool arguments. Replace the placeholder ID and copy the 
    {
      "rem_id": "YOUR_REM_ID",
      "expected_revision": "COPY_REVISION_FROM_READ",
+     "request_id": "NEW_UNIQUE_REQUEST_KEY",
+     "type": "basic",
      "back": "The new answer."
    }
    ```
@@ -152,8 +156,8 @@ This removes only the Edit Later powerup through the SDK and verifies that the s
 - An empty inline `back` does **not** establish a blank practice answer. RemNote marks the answer's children as [Multi-line Card Items](https://help.remnote.com/en/articles/9216774-multi-line-list-set-flashcards); the question itself can lack that marker and still have a `forward` practice card. `read_flashcard` returns those children in `answer_items`, including nested marked items and their rich text. `card_structure.multiline` includes these parent cards; `multiline_item` identifies a Rem that is itself marked as an answer item.
 - Check `answer_inspection.source` and `answer_items` before assessing missing content. Unmarked child notes are not assumed to be answers. `rendering_verified` remains false: the SDK structure is not a practice-screen preview, and extra detail, hidden content and other display rules may affect rendering. Inspection is bounded to 50 children across the inspected branches and eight nesting levels; incomplete, changing or larger structures are refused instead of guessed.
 - Basic forward, backward and bidirectional cards are supported. Stored front/back are not necessarily the displayed question/answer of a backward practice card.
-- Cloze, multiline, multiple-choice and other unsupported card structures are refused for editing. Reads remain available when the SDK provides complete metadata.
-- Revisions include marked child-answer content and structure, so changing a child invalidates the parent's earlier revision. Writes through this proxy are serialized per Rem. Other clients can still change a card between a check and a write.
+- Basic and flat multiline typed edits are supported; type conversions, nested-answer replacement, cloze and multiple-choice edits are refused. Reads remain available when the SDK provides complete metadata.
+- Revisions include marked child-answer content/structure and direct unmarked context, so changing a child invalidates the parent's earlier revision. Writes through this proxy are serialized per Rem. Other clients can still change a card between a check and a write.
 - Updating both sides requires separate SDK operations. A failure can leave a partial change. Read the card again before recovery; the proxy leaves Edit Later unresolved and does not automatically retry or roll back.
 - `delete_rem` refuses unknown types, documents and folders. Deleting a parent requires `allow_descendants: true`, which also authorizes deletion of its subtree. Git rollback restores code, not notes.
 - Verification tokens expire after seven days. Changing the MCP authentication token invalidates them.

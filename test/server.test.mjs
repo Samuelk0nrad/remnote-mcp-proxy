@@ -419,3 +419,20 @@ test('keep unchanged verifies marked child answer content after marker removal',
   const before=await service.read('testRem123');
   await assert.rejects(()=>service.keep({rem_id:before.rem_id,expected_revision:before.revision,expected_queue_revision:before.edit_later.queue_revision,review_reason:'Already correct'}),/unchanged content could not be verified/);
 });
+
+
+test('schedule snapshot tracks retained scheduling and optionally active queue fields',()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'remnote-schedule-')),filename=path.join(dir,'db.sqlite');
+ const db=new DatabaseSync(filename);
+ try {
+  db.exec('CREATE TABLE cards (_id TEXT PRIMARY KEY, doc TEXT)');
+  const data={rId:'rem123',n:1234,ne:{reason:'test'},ml:'Growing',t:2,l:1200,st:2000,ny:false,a:1234,d:1234,b:false};
+  db.prepare('INSERT INTO cards VALUES (?,?)').run('card123',JSON.stringify(data));
+  const repo=new EditLaterRepository(filename),before=repo.cardScheduleSnapshot(['card123','card123','missing']);
+  assert.equal(before.length,1);assert.equal(before[0].schedule.n,1234);assert.deepEqual(before[0].schedule.ne,{reason:'test'});
+  const preserved=repo.cardScheduleSnapshot(['card123'],{includeActive:false});
+  db.prepare('UPDATE cards SET doc=?').run(JSON.stringify({...data,a:null,d:null,b:true}));
+  assert.notDeepEqual(repo.cardScheduleSnapshot(['card123']),before);assert.deepEqual(repo.cardScheduleSnapshot(['card123'],{includeActive:false}),preserved);
+  db.prepare('UPDATE cards SET doc=?').run(JSON.stringify({...data,n:5678}));assert.notDeepEqual(repo.cardScheduleSnapshot(['card123'],{includeActive:false}),preserved);
+ } finally {db.close();rmSync(dir,{recursive:true,force:true});}
+});

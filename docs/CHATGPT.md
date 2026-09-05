@@ -151,3 +151,7 @@ Proxy 0.9.0 adds `list_flashcards` (39 tools). Refresh the catalog to load it. A
 ### Moving existing flashcards
 
 Proxy 0.10.0 adds `move_flashcards` (40 tools). Refresh the catalog to load it. For relocation, ask ChatGPT to read the source cards and destination heading first, then move the existing Rem IDs with fresh revisions and explicit placement. It preserves child answers/context and checks practice-card IDs and retained history. It does not recreate cards or clear Edit Later. See the [move guide](MOVING.md).
+
+## Typed updater
+
+Proxy 0.11.0 extends `update_flashcard` without adding a tool (40 total). Refresh the catalog to load `type`, `direction`, multiline `back.items`, `notes`, explicit child-removal lists and `request_id`. Read first and retain item IDs when editing or reordering answers. The typed updater preserves and verifies existing history and schedules; it has no reset option. See the [update guide](UPDATING.md) for examples, direction changes and partial-failure recovery.

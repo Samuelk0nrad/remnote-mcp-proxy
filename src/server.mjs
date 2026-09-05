@@ -149,6 +149,22 @@ export class EditLaterRepository {
     });
   }
 
+  cardScheduleSnapshot(cardIds, { includeActive = true } = {}) {
+    if (!cardIds.length) return [];
+    return this.withDatabase(db => {
+      const query = db.prepare('SELECT _id, doc FROM cards WHERE _id = ?');
+      // RemNote card properties: due date, explanation, mastery, failure streak,
+      // last review, stale date, not-yet-learned; active fields may change with direction.
+      const fields = ['n', 'ne', 'ml', 't', 'l', 'st', 'ny', ...(includeActive ? ['a', 'd', 'b'] : [])];
+      return [...new Set(cardIds)].sort().flatMap(id => {
+        const row = query.get(id);
+        if (!row) return [];
+        const doc = JSON.parse(row.doc);
+        return [{ _id: row._id, schedule: Object.fromEntries(fields.map(field => [field, doc[field] ?? null])) }];
+      });
+    });
+  }
+
   get(id) {
     return this.withDatabase(db => {
       const row = db.prepare("SELECT _id, doc FROM quanta WHERE _id = ? AND json_extract(doc, '$.apu.e.v') = 1").get(id);
@@ -423,7 +439,7 @@ export function createMcpHandler({
     return journal;
   };
   const creation = createCardCreationService(runtimeMcpRunner, getOperationJournal);
-  const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken);
+  const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken, { getJournal: getOperationJournal });
   const moves = createCardMoveService(runtimeMcpRunner, flashcards, repository, getOperationJournal);
   const status = createStatusService(repository, runtimeMcpRunner, verifyStatusAdapter);
   const workload = createWorkloadService(repository, runtimeMcpRunner, verifyStatusAdapter);
