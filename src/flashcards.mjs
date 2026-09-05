@@ -89,11 +89,17 @@ export function createFlashcardService(run, repository, tokenSecret) {
     if (typeof state?.isDocument !== 'boolean' || typeof state?.isFolder !== 'boolean') throw new Error('Runtime returned unknown document/folder status; refusing to guess.');
     const cardResult = await remCall('cards', remId);
     if (!Array.isArray(cardResult?.cards) || cardResult.cards.length >= 100 || cardResult.cards.some(c => !c?.cardId || c.remId !== remId || typeof c.type !== 'string')) throw new Error('Runtime returned incomplete or unsupported card metadata.');
+    const cardStructure = {};
+    for (const [name, code] of [['multiline', 'w'], ['multiple_choice', 'mc']]) {
+      const result = await remCall('has_powerup', remId, { powerupCode: code });
+      if (typeof result?.hasPowerup !== 'boolean') throw new Error('Unknown card structure.');
+      cardStructure[name] = result.hasPowerup;
+    }
     const cards = cardResult.cards.map(c => ({ card_id: c.cardId, rem_id: c.remId, type: c.type })).sort((a, b) => a.card_id.localeCompare(b.card_id));
     const snapshot = {
       rem_id: remId, front_rich_text: rem.text, back_rich_text: rem.backText ?? [],
       has_back: Array.isArray(rem.backText), parent_rem_id: rem.parentRemId ?? null,
-      children: rem.children, rem_type: rem.type ?? null, state, cards,
+      children: rem.children, rem_type: rem.type ?? null, state, cards, card_structure: cardStructure,
       updated_at: rem.updatedAt ?? null,
     };
     // Detect a concurrent edit during the multi-call read.
@@ -103,10 +109,10 @@ export function createFlashcardService(run, repository, tokenSecret) {
       practice_direction: state.practiceDirection ?? null,
       field_semantics: 'front/back are stored Rem sides; backward practice reverses their roles. Arrows within either field are literal content.',
       revision: digest(snapshot),
-      supported_basic_card: cards.length > 0 && cards.every(c => ['forward', 'backward'].includes(c.type)) && !state.isCardItem && Array.isArray(rem.backText),
+      supported_basic_card: cards.length > 0 && cards.every(c => ['forward', 'backward'].includes(c.type)) && state.isCardItem === false && !cardStructure.multiline && !cardStructure.multiple_choice && Array.isArray(rem.backText),
     };
   }
-  const structure = s => ({parent: s.parent_rem_id, children: s.children, type: s.rem_type, state: s.state, cards: s.cards, has_back: s.has_back});
+  const structure = s => ({parent: s.parent_rem_id, children: s.children, type: s.rem_type, state: s.state, cards: s.cards, card_structure: s.card_structure, has_back: s.has_back});
   function checkRevision(snapshot, revision) {
     expectedRevision(revision);
     if (snapshot.revision !== revision) throw new Error('Revision conflict: the Rem changed since it was read. Read it again and reconsider the edit. No write was attempted.');

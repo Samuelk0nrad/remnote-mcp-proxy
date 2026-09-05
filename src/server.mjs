@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { STATUS_TOOLS, createStatusService, createAdapterVerifier } from './card-status.mjs';
 import { FLASHCARD_TOOLS, createFlashcardService, strictArgs } from './flashcards.mjs';
 
 const EDIT_LATER_CODE = 'e';
@@ -41,6 +42,7 @@ const EXTRA_TOOLS = [
     },
   },
   ...FLASHCARD_TOOLS,
+  ...STATUS_TOOLS,
 ];
 
 function asBoolean(value) {
@@ -380,8 +382,10 @@ export function createMcpHandler({
   repository,
   runtimeMcpRunner,
   logger = console,
+  verifyStatusAdapter = createAdapterVerifier(process.env.REMNOTE_APP_ASAR ?? '/opt/remnote/app/resources/app.asar'),
 }) {
   const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken);
+  const status = createStatusService(repository, runtimeMcpRunner, verifyStatusAdapter);
   return async function handler(request, response) {
     if (request.url !== '/mcp') {
       response.writeHead(404).end('Not found');
@@ -453,7 +457,11 @@ export function createMcpHandler({
         }
 
         let payload;
-        if (name === 'read_flashcard') {
+        if (name === 'get_card_status') {
+          payload = await status.get(args);
+        } else if (name === 'list_cards_by_status') {
+          payload = await status.list(args);
+        } else if (name === 'read_flashcard') {
           strictArgs(args, ['rem_id'], ['rem_id']);
           payload = await flashcards.read(args.rem_id);
         } else if (name === 'update_flashcard') {

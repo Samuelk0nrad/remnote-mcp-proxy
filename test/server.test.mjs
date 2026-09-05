@@ -23,7 +23,7 @@ function fixture({text = ['Question'], back = ['Old answer'], type = 'forward', 
     if (operation === 'get') return {rem:copy(rem)};
     if (operation === 'state') return copy(state);
     if (operation === 'cards') return {cards:copy(cards)};
-    if (operation === 'has_powerup') return {hasPowerup:queued};
+    if (operation === 'has_powerup') return {hasPowerup:args.powerupCode==='e'?queued:false};
     writes.push(copy(args));
     if (operation === 'set_text') rem.text=copy(args.richText);
     else if (operation === 'set_back_text') rem.backText=copy(args.richText);
@@ -249,4 +249,54 @@ test('runtime runner normalizes text-only payloads and closes the session',async
   }});
   assert.deepEqual(await run('remnote_rem',{operation:'state',remId:'testRem123'}),{isDocument:true});
   assert.equal(methods.at(-1),'DELETE');
+});
+
+// Native status rules, including the non-obvious multiple-of-threshold behavior.
+const {cardLabels,readLeechThreshold,createStatusService,createAdapterVerifier}=await import('../src/card-status.mjs');
+const scores=(...values)=>values.map(score=>({score}));
+test('leech follows native positive threshold multiples, not total failures >= threshold',()=>{
+  for(const [n,leech] of [[0,false],[3,false],[4,true],[5,false],[8,true]]) {
+    const result=cardLabels({h:scores(...Array(n).fill(0))},{},4);
+    assert.equal(result.labels.leech,leech,`failures=${n}`);
+  }
+  assert.equal(cardLabels({h:scores(0,0,0,0,0,0)},{},6).labels.leech,true);
+});
+test('native leech history starts after Reset and first Good/Easy, retaining later relearning failures',()=>{
+  assert.equal(cardLabels({h:scores(0,0,0,0,3)},{},4).labels.leech,false);
+  assert.equal(cardLabels({h:scores(0,0,0,1,0,0,0,0)},{},4).leech_failure_count,4);
+  assert.equal(cardLabels({h:scores(1,0,1,0,1.5,0,1,0)},{},4).labels.leech,true);
+  assert.equal(cardLabels({h:scores(0,0,0,0,3,0)},{},4).leech_failure_count,1);
+});
+test('Disabled excludes Edit Later and retired cards; New and Stale follow reset history',()=>{
+  assert.equal(cardLabels({}, {},4).labels.disabled,true);
+  assert.equal(cardLabels({}, {apu:{e:{v:true}}},4).labels.disabled,false);
+  assert.equal(cardLabels({b:true}, {},4).labels.disabled,false);
+  assert.equal(cardLabels({a:100}, {},4).labels.enabled,true);
+  assert.equal(cardLabels({h:scores(1,3),st:1}, {},4,100).labels.new,true);
+  assert.equal(cardLabels({h:scores(1,3),st:1}, {},4,100).labels.stale,false);
+  assert.equal(cardLabels({h:scores(1),st:1}, {},4,100).labels.stale,true);
+});
+test('status adapter honors configured leech threshold and rejects ambiguous settings',t=>{
+  const {file}=databaseFixture(t,0);const db=new DatabaseSync(file);db.exec('CREATE TABLE user_data (_id TEXT,doc TEXT)');
+  assert.equal(readLeechThreshold(db).value,4);
+  db.prepare('INSERT INTO user_data VALUES (?,?)').run('setting1',JSON.stringify({key:'leechThreshold',value:6}));
+  assert.equal(readLeechThreshold(db).value,6);
+  db.prepare('INSERT INTO user_data VALUES (?,?)').run('setting2',JSON.stringify({key:'leechThreshold',value:8}));
+  assert.throws(()=>readLeechThreshold(db),/Ambiguous/);db.close();
+});
+test('status queries paginate actual matches and reject cursors from another label',async t=>{
+  const {file,repository}=databaseFixture(t,3);const db=new DatabaseSync(file);db.exec('CREATE TABLE user_data (_id TEXT,doc TEXT)');
+  const insert=db.prepare('INSERT INTO cards VALUES (?,?)');
+  for(let i=0;i<3;i++)insert.run(`card${i}`,JSON.stringify({rId:`testRem00${i}`,c:'f',h:scores(0,0,0,0),a:100}));db.close();
+  const service=createStatusService(repository,async()=>({rems:[{remId:'tagRem',text:['Hard Card']}],total:1,truncated:false}),async()=>{});
+  const first=await service.list({status:'leech',limit:2});assert.equal(first.total,3);assert.equal(first.count,2);assert.equal(first.has_more,true);
+  const second=await service.list({status:'leech',limit:2,cursor:first.next_cursor});assert.equal(second.count,1);assert.equal(second.has_more,false);
+  await assert.rejects(()=>service.list({status:'disabled',cursor:first.next_cursor}),/does not belong/);
+  const one=await service.get({rem_id:'testRem000'});assert.equal(one.items[0].labels.leech,true);assert.equal(one.tags[0].text,'Hard Card');
+});
+test('unverified app build prevents label claims',async t=>{
+  const {repository}=databaseFixture(t,0);
+  const service=createStatusService(repository,async()=>{},async()=>{throw new Error('app changed');});
+  await assert.rejects(()=>service.list({status:'leech'}),/app changed/);
+  await assert.rejects(()=>createAdapterVerifier('/nonexistent/test-only.asar')());
 });
