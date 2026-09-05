@@ -16,7 +16,7 @@ Point the tunnel at the **proxy**, not directly at RemNote's built-in MCP or the
 
 ## 1. Start the RemNote services
 
-Follow the [local setup](../README.md#run-locally) or [deployment guide](../deploy/README.md). RemNote Desktop, the SDK runtime and the proxy must be running against the same knowledge base.
+Follow the [first-time setup guide](SETUP.md), or use the [deployment guide](../deploy/README.md) for an installation that is already configured. RemNote Desktop, the SDK runtime and the proxy must be running against the same knowledge base.
 
 Use the proxy's local endpoint, normally `http://127.0.0.1:7789/mcp`, as the tunnel target. Loopback refers to the machine running the tunnel client, so run it alongside the proxy for this example.
 
@@ -53,12 +53,12 @@ tunnel-client run \
   --mcp.server-url 'url=http://127.0.0.1:7789/mcp,channel=main' \
   --mcp.extra-headers 'Authorization: file:/absolute/path/to/remnote-auth-header' \
   --mcp.discovery-extra-headers 'Authorization: file:/absolute/path/to/remnote-auth-header' \
-  --health.listen-addr 127.0.0.1:8080
+  --health.listen-addr 127.0.0.1:8081
 ```
 
 These flags were checked against the installed `tunnel-client` 0.0.13 CLI. Check `tunnel-client run --help` for your installed version. The `file:` references keep secret values out of command arguments. Both normal requests and discovery probes need the RemNote header.
 
-Inspect the local readiness endpoint at `http://127.0.0.1:8080/readyz` and the operator UI at `http://127.0.0.1:8080/ui`. For an unattended installation, run this command under a service manager and keep its secret files outside Git. The [existing service examples](../deploy/README.md) cover the RemNote runtime and proxy; they do not start the tunnel client.
+Inspect the local readiness endpoint at `http://127.0.0.1:8081/readyz` and the operator UI at `http://127.0.0.1:8081/ui`. For an unattended installation, run this command under a service manager and keep its secret files outside Git. The [existing service examples](../deploy/README.md) cover the RemNote runtime and proxy; they do not start the tunnel client.
 
 ## 3. Add the connection in ChatGPT
 

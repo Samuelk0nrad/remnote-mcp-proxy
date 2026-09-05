@@ -1,6 +1,6 @@
 # Deployment examples
 
-These files are templates for an existing RemNote Desktop and Agent Runtime installation. Adapt them to your environment; they are not an installer.
+These files are templates for an existing RemNote Desktop and Agent Runtime installation. For a new installation, complete the [first-time setup guide](../docs/SETUP.md) first. Adapt these templates to your environment; they are not an installer.
 
 | File | Purpose |
 | --- | --- |

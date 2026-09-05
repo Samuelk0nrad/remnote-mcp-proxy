@@ -19,11 +19,15 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 
 The legacy `update_rem` tool accepts plain Rem text only and requires a revision. It refuses flashcards; use `update_flashcard` for those.
 
+## First-time setup
+
+Start with the [complete installation guide](docs/SETUP.md): obtain the compatible runtime, build and load its RemNote plugin, pair the bridge, locate your database, and verify the proxy before connecting ChatGPT.
+
 ## Requirements
 
 - **Node.js 24 or newer.** The proxy has no third-party runtime dependencies.
 - **RemNote Desktop**, with its built-in MCP endpoint enabled.
-- **RemNote Agent Runtime / SDK bridge**, already installed, built and running.
+- **[RemNote Agent Runtime / SDK bridge](https://github.com/Gabriel7w7r/remnote-agent-runtime)** 0.20.3; install the matched server and plugin using the [setup guide](docs/SETUP.md).
 - Read access to the database for the currently open knowledge base and the relevant authentication files.
 
 The database, built-in MCP endpoint and SDK runtime must all refer to the **same knowledge base**. Update the database configuration when switching knowledge bases.
@@ -132,7 +136,7 @@ For paginated status and queue results, follow `next_cursor` while `has_more` is
 
 ## Validation
 
-Run the unit suite without a live RemNote installation:
+The [Tests workflow](https://github.com/Samuelk0nrad/remnote-mcp-proxy/actions/workflows/tests.yml) runs the unit suite on pushes to `main`, pull requests, and manual dispatch. It uses Node.js 24 and needs no RemNote credentials. Run the same suite locally:
 
 ```sh
 npm test
@@ -157,3 +161,7 @@ The smoke test creates, edits and cleans up its own temporary notes. Run it as t
 See [the deployment README](deploy/README.md) for the service examples, optional tunnel configuration and rollback procedure. Refresh your MCP client's tool catalog after schema changes; ChatGPT may need a fresh conversation to use the updated tools.
 
 Commit completed changes and keep a rollback checkpoint before deploying. Contributor guidance is in [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE). The separately installed RemNote application and Agent Runtime retain their own licenses.
