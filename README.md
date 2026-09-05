@@ -144,16 +144,17 @@ This removes only the Edit Later powerup through the SDK and verifies that the s
 
 ## Review timing analytics
 
-Version 0.6.0 extends the five existing history/statistics/workload/comparison/trend tools; the catalog remains 37 tools. Timing is read-only and works with any subject. See the [timing data reference](docs/TIMING.md) for fields, exclusions, quantiles and verified source semantics.
+Version 0.7.0 extends the five existing history/statistics/workload/comparison/trend tools; the catalog remains 37 tools. Total response time and stored reveal offset have separate summaries, rating breakdowns and trends. Timing is read-only and works with any subject. See the [timing data reference](docs/TIMING.md) for fields, exclusions, quantiles and verified source semantics.
 
-Supply an optional `max_review_seconds` chosen for the analysis. Omit it for **no duration cutoff**. For example:
+Supply an optional `max_review_seconds` chosen for the analysis. Use `max_reveal_seconds` independently for reveal-offset filtering. Omit either parameter for **no cutoff on that measurement**. For example:
 
 ```json
 {
   "timezone": "Europe/Vienna",
   "start_date": "2026-09-01",
   "end_date": "2026-09-05",
-  "max_review_seconds": 600
+  "max_review_seconds": 600,
+  "max_reveal_seconds": 300
 }
 ```
 

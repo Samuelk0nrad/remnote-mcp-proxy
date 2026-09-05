@@ -14,7 +14,7 @@ The forecast tool remains a stored-schedule snapshot. It does not multiply due c
 
 ## Raw measurements and quality
 
-`timing.response_time_ms` and `timing.reveal_time_ms` retain finite numeric source values, including negative values marked invalid. Missing or nonnumeric values return null with a separate state; strings and arbitrary objects are not exported as timings. `recorded_seconds` is usable nonnegative response time divided by 1,000. Missing, invalid and zero values are distinguished. Unsafe values above JavaScript's safe numeric range are invalid for statistics. Valid response time remains usable even if reveal time is missing or inconsistent.
+`timing.response_time_ms` and `timing.reveal_time_ms` retain finite numeric source values, including negative values marked invalid. Missing or nonnumeric values return null with a separate state; strings and arbitrary objects are not exported as timings. `recorded_seconds` is usable nonnegative response time divided by 1,000; `reveal_seconds` is the corresponding reveal offset. Separate threshold flags preserve all history entries. Missing, invalid and zero values are distinguished. Unsafe values above JavaScript's safe numeric range are invalid for statistics. Valid response time remains usable even if reveal time is missing or inconsistent.
 
 **Response time already includes the full recorded review. Never add reveal time to it.** In the installed desktop review controller, response time is the submission timestamp minus the current review's start timestamp. Reveal time is an offset from that same start. Hide/reveal actions can update the reveal state, and imports or external grades can use zero defaults, so the proxy does not claim a precise first-reveal or active front/back time split.
 
@@ -24,9 +24,11 @@ The response includes flags such as `missing_response_time`, `invalid_response_t
 
 `max_review_seconds` is an optional finite positive number, including fractions. **There is no default threshold.** A response time strictly greater than the supplied threshold is excluded only from the additional filtered distributions. Exactly equal values are retained. The agent should explain its chosen threshold and keep it consistent across comparisons. It is bound into pagination cursors; changing it requires restarting pagination.
 
-Every summary contains:
+Existing summary fields continue to describe **total response time**. Each summary now also has a separate `reveal` object with the same distributions, quality counts and rating/mode/origin/structure breakdowns for stored reveal offsets. This applies to daily totals, per-card period/lifetime statistics, topics and earlier/recent windows.
 
-- `max_review_seconds`: chosen threshold or null.
+Every measurement summary contains:
+
+- `max_review_seconds` for response or `max_reveal_seconds` for reveal: chosen threshold or null.
 - `graded_reviews`, missing/invalid duration counts and `zero_duration_reviews`.
 - `unfiltered`: all usable nonnegative recorded durations, including zeros.
 - `positive_only`: the same data excluding zero/default values.
@@ -40,7 +42,11 @@ Only real graded outer events contribute to timing summaries, following existing
 
 Origins distinguish explicit `addedExternally`, recognized Anki import metadata, and native-mobile metadata; otherwise origin is `standard_or_unknown`. These markers do not establish a complete provenance history. Workload and per-card views include all practice modes/origins and break them out; history, comparison and trend tools retain their existing mode/external filters. `include_external: false` excludes explicitly externally added grades, not every import. `multiline` grouping means stored item scores or a full/partial multiline flag exist; absence of those fields does not prove a basic card.
 
-Timing changes report median difference and ratio, with sample sizes, for each unfiltered/positive/filtered distribution. The existing `min_reviews` applies independently to usable timed samples in both windows. A reset or invalid review history suppresses changes; a zero earlier median makes the ratio null. Faster is not automatically better recall: examine rating mix, origin, structure and sample sizes.
+Reveal summaries also report `exceeds_response_time_reviews` and `response_time_unavailable_reviews`. Nonnegative reveal values remain visible in unfiltered statistics even when inconsistent with total response time; these counts flag the uncertainty.
+
+`max_reveal_seconds` has the same validation and strict-greater-than rule as `max_review_seconds`, but each filters only its own measurement. Neither has a default. A review with a long total but short reveal can therefore remain in the filtered reveal statistics. Sample sets can differ: never subtract medians or totals to infer checking time, and never add reveal totals to response totals.
+
+Timing changes report median difference and ratio, with sample sizes, for each unfiltered/positive/filtered distribution. The existing `min_reviews` applies independently to usable timed samples in both windows. A reset or invalid review history suppresses changes; a zero earlier median makes the ratio null. `timing.change.reveal` reports the same independently gated comparisons for reveal offsets. Faster is not automatically better recall: examine rating mix, origin, structure and sample sizes.
 
 ## Multiline answer items
 

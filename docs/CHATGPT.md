@@ -134,3 +134,5 @@ Proxy 0.5.1 corrects child-answer detection in `read_flashcard` without adding t
 ### Timing analytics
 
 Proxy 0.6.0 extends five existing analytics tools with recorded timing data. Refresh the catalog to load their updated descriptions and optional `max_review_seconds` parameter; there are still 37 tools. No duration cutoff is applied unless the agent supplies one. Ask for raw and filtered results, excluded review counts/time, median and quartiles, and timing by rating. A long review does not prove a pause. See the [timing reference](TIMING.md).
+
+Proxy 0.7.0 adds separate reveal-offset summaries and trends under `timing.reveal` and `timing.change.reveal`, plus optional `max_reveal_seconds`. Refresh the same 37-tool catalog to load this parameter. The existing response-time fields stay compatible. Thresholds filter each measurement independently, with raw and filtered statistics visible; samples can differ. Neither measurement proves active recall, and their totals must not be added.

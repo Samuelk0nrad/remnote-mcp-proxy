@@ -86,7 +86,7 @@ try{
  results.marked_child_answers=true;
  const workload=await call('get_study_workload',{timezone:'UTC',root_rem_id:id});assert.equal(workload.inventory.current_cards,1);assert.equal(workload.reviews.graded_reviews,0);
  const stats=await call('list_card_review_stats',{timezone:'UTC',root_rem_id:id});assert.equal(stats.total,1);assert.equal(stats.items[0].lifetime.graded_reviews,0);assert.equal(stats.items[0].timing.period.unfiltered.samples,0);assert.equal(workload.timing.unfiltered.recorded_seconds,null);
- const timingCheck=await call('get_study_workload',{timezone:'UTC',root_rem_id:id,max_review_seconds:60});assert.equal(timingCheck.timing.max_review_seconds,60);assert.equal(timingCheck.timing.filtered.samples,0);results.workload_tools=true;
+ const timingCheck=await call('get_study_workload',{timezone:'UTC',root_rem_id:id,max_review_seconds:60,max_reveal_seconds:30});assert.equal(timingCheck.timing.max_review_seconds,60);assert.equal(timingCheck.timing.filtered.samples,0);assert.equal(timingCheck.timing.reveal.max_reveal_seconds,30);assert.equal(timingCheck.timing.reveal.filtered.samples,0);results.workload_tools=true;
 
  const current=await call('read_flashcard',{rem_id:id});
  await assert.rejects(()=>call('update_rem',{id,text:'Question → answer',expected_revision:current.revision}),/cannot update flashcards/);

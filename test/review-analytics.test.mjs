@@ -98,3 +98,22 @@ test('timing filters, quality coverage and pagination stay consistent with revie
  for(const max_review_seconds of [0,-1,'5',null,Infinity]){await assert.rejects(()=>f.workload.summary({...options,max_review_seconds}));await assert.rejects(()=>f.service.timeline({...options,rem_id:'childAlpha',max_review_seconds}));}
  await assert.rejects(()=>f.service.forecast({timezone:'UTC',max_review_seconds:10}),/Expected fields/);
 });
+
+test('separate reveal distributions and trends agree across all five tools',async t=>{
+ const f=fixture(t);f.card('cardAlpha','childAlpha',[event('2026-01-01',0,{responseTime:100000,revealTime:4000}),event('2026-01-02',.5,{responseTime:10000,revealTime:6000}),event('2026-01-09',1,{responseTime:20000,revealTime:2000}),event('2026-01-10',1.5,{responseTime:10000,revealTime:1000})]);
+ const args={...options,max_review_seconds:20,max_reveal_seconds:4};
+ const summary=await f.workload.summary(args);assert.equal(summary.timing.reveal.unfiltered.recorded_seconds,13);assert.equal(summary.timing.reveal.filtered.recorded_seconds,7);assert.equal(summary.timing.reveal.unfiltered.median_seconds,3);
+ assert.equal(summary.daily.reduce((sum,d)=>sum+(d.timing.reveal.unfiltered.recorded_seconds??0),0),13);
+ const stats=await f.workload.list(args);assert.deepEqual(stats.items[0].timing.period.reveal,summary.timing.reveal);
+ const comparison=await f.service.compare({...args,root_rem_ids:['rootAlpha','rootBeta']});assert.deepEqual(comparison.topics[0].timing.reveal,summary.timing.reveal);
+ const trends=await f.service.trends({...args,min_reviews:2});assert.equal(trends.items[0].timing.change.reveal.unfiltered.median_seconds_change,-3.5);assert.equal(trends.items[0].timing.change.reveal.filtered.status,'insufficient_timed_reviews');
+ const timeline=await f.service.timeline({...args,rem_id:'childAlpha'});assert.equal(timeline.total,4);assert.equal(timeline.items[0].timing.exceeds_selected_threshold,true);assert.equal(timeline.items[0].timing.exceeds_selected_reveal_threshold,false);
+ const noCutoff=await f.workload.summary(options);assert.equal(noCutoff.timing.reveal.filtered,null);assert.deepEqual(noCutoff.timing.reveal.unfiltered,summary.timing.reveal.unfiltered);
+});
+test('reveal cutoff is bound to cursors and reveal trends require measured samples',async t=>{
+ const f=fixture(t);f.card('cardAlpha','childAlpha',[event('2026-01-01',1,{responseTime:1000}),event('2026-01-02',1,{responseTime:1000}),event('2026-01-09',1,{responseTime:1000}),event('2026-01-10',1,{responseTime:1000})]);f.card('cardBeta','rootBeta',[]);
+ const trend=(await f.service.trends({...options,min_reviews:2})).items[0];assert.equal(trend.timing.change.unfiltered.status,'available');assert.equal(trend.timing.change.reveal.unfiltered.status,'insufficient_timed_reviews');assert.equal(trend.timing.change.reveal.unfiltered.median_seconds_change,null);
+ const args={...options,rem_id:'childAlpha',max_reveal_seconds:5,limit:1},page=await f.service.timeline(args);await assert.rejects(()=>f.service.timeline({...args,max_reveal_seconds:10,cursor:page.next_cursor}),/does not belong/);
+ const stat=await f.workload.list({...options,max_reveal_seconds:5,limit:1});await assert.rejects(()=>f.workload.list({...options,max_reveal_seconds:10,limit:1,cursor:stat.next_cursor}),/does not belong/);
+ await assert.rejects(()=>f.service.forecast({timezone:'UTC',max_reveal_seconds:5}),/Expected fields/);
+});

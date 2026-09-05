@@ -31,3 +31,14 @@ test('timing groups distinguish rating, practice mode and known origin markers',
  const a=timingAccumulator();for(const e of [{score:0,isCram:true},{score:.5,addedExternally:true},{score:1,metadata:{ankiImport:true}},{score:1.5,metadata:{fromNativeMobile:true}}])a.add({...e,responseTime:1000});
  const r=a.result();assert.equal(r.by_rating.again.unfiltered.samples,1);assert.equal(r.by_origin.anki_import.unfiltered.recorded_seconds,1);assert.equal(r.by_origin.externally_added.graded_reviews,1);assert.equal(r.by_practice_mode.cram.graded_reviews,1);
 });
+
+test('reveal summaries keep independent thresholds, sample quality, and nonadditive totals',()=>{
+ const a=timingAccumulator({max_review_seconds:10,max_reveal_seconds:5});
+ for(const e of [{responseTime:100000,revealTime:4000},{responseTime:8000,revealTime:6000},{responseTime:9000,revealTime:0},{responseTime:1000,revealTime:2000},{responseTime:1000},{revealTime:3000},{responseTime:1000,revealTime:-1}])a.add({score:1,...e});
+ const r=a.result();assert.equal(r.unfiltered.recorded_seconds,120);assert.equal(r.filtered.recorded_seconds,20);
+ assert.equal(r.reveal.unfiltered.recorded_seconds,15);assert.equal(r.reveal.filtered.recorded_seconds,9);assert.equal(r.reveal.filtered.samples,4);assert.equal(r.reveal.positive_only.samples,4);
+ assert.equal(r.reveal.zero_duration_reviews,1);assert.equal(r.reveal.missing_duration_reviews,1);assert.equal(r.reveal.invalid_duration_reviews,1);assert.equal(r.reveal.exceeds_response_time_reviews,1);assert.equal(r.reveal.response_time_unavailable_reviews,1);
+ assert.deepEqual(r.reveal.excluded_by_threshold,{reviews:1,recorded_seconds:6});assert.equal(r.reveal.by_rating.good.unfiltered.median_seconds,3);
+ const t=eventTiming({responseTime:8000,revealTime:6000},{max_review_seconds:10,max_reveal_seconds:5});assert.equal(t.exceeds_selected_threshold,false);assert.equal(t.exceeds_selected_reveal_threshold,true);assert.equal(t.reveal_seconds,6);
+ for(const value of [0,-1,'10',null,Infinity])assert.throws(()=>validateTiming({max_reveal_seconds:value}));
+});
