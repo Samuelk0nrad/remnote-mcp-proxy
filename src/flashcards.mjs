@@ -87,7 +87,17 @@ export function createFlashcardService(run, repository, tokenSecret) {
     if (!rem || rem.remId !== remId || !Array.isArray(rem.text) || !Array.isArray(rem.children) || (rem.backText != null && !Array.isArray(rem.backText))) throw new Error('Runtime returned incomplete Rem content; refusing to guess.');
     const state = await remCall('state', remId);
     if (typeof state?.isDocument !== 'boolean' || typeof state?.isFolder !== 'boolean') throw new Error('Runtime returned unknown document/folder status; refusing to guess.');
-    const cardResult = await remCall('cards', remId);
+    let cardResult = await remCall('cards', remId);
+    // getCards() omits Edit Later/disabled cards. Find persisted identities through
+    // the SDK as well, never infer their live type from the database code.
+    const persistedIds = repository.cardIds?.(remId) ?? [];
+    if (persistedIds.length >= 100) throw new Error('Too many practice cards for one safe edit.');
+    if (persistedIds.length) {
+      const persisted = await run('remnote_card', { operation: 'find_many', cardIds: persistedIds });
+      if (!Array.isArray(persisted?.cards) || persisted.cards.some(c => !c)) throw new Error('Card identities are still syncing; read again before editing.');
+      const merged = new Map([...(cardResult?.cards ?? []), ...persisted.cards].map(c => [c.cardId, c]));
+      cardResult = { cards: [...merged.values()] };
+    }
     if (!Array.isArray(cardResult?.cards) || cardResult.cards.length >= 100 || cardResult.cards.some(c => !c?.cardId || c.remId !== remId || typeof c.type !== 'string')) throw new Error('Runtime returned incomplete or unsupported card metadata.');
     const cardStructure = {};
     for (const [name, code] of [['multiline', 'w'], ['multiple_choice', 'mc']]) {

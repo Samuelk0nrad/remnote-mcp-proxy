@@ -120,6 +120,10 @@ export class EditLaterRepository {
 
   list(limit = 100) { return this.listPage(limit).items; }
 
+  cardIds(remId) {
+    return this.withDatabase(db => db.prepare("SELECT _id FROM cards WHERE json_extract(doc, '$.rId') = ? AND COALESCE(json_extract(doc, '$.b'),0) <> 1 ORDER BY _id LIMIT 101").all(remId).map(row => row._id));
+  }
+
   get(id) {
     return this.withDatabase(db => {
       const row = db.prepare("SELECT _id, doc FROM quanta WHERE _id = ? AND json_extract(doc, '$.apu.e.v') = 1").get(id);

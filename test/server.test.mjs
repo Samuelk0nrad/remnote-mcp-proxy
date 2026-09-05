@@ -300,3 +300,14 @@ test('unverified app build prevents label claims',async t=>{
   await assert.rejects(()=>service.list({status:'leech'}),/app changed/);
   await assert.rejects(()=>createAdapterVerifier('/nonexistent/test-only.asar')());
 });
+test('Edit Later cards hidden by getCards retain their persisted live SDK identities',async()=>{
+  const f=fixture();
+  const service=createFlashcardService((name,args)=>{
+    if(name==='remnote_card'&&args.operation==='find_many')return {cards:copy(f.cards)};
+    if(args.operation==='cards')return {cards:[]};
+    return f.run(name,args);
+  },{...f.repository,cardIds:()=>['practiceCard123']},'test-secret');
+  const before=await service.read('testRem123');assert.equal(before.supported_basic_card,true);
+  const result=await service.update({rem_id:before.rem_id,expected_revision:before.revision,back:'Corrected'},'flashcard');
+  assert.deepEqual(result.card.cards,before.cards);assert.equal(result.verified,true);
+});
