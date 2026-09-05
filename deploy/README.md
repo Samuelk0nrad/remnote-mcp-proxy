@@ -34,6 +34,8 @@ See the [configuration table](../README.md#configuration) for defaults and overr
 
 ## Remote access
 
+For ChatGPT, use the [step-by-step integration guide](../docs/CHATGPT.md), including private tunnel setup and authentication.
+
 The proxy binds to loopback by default and requires bearer-token authentication. Choose a transport compatible with your MCP client and preserve that authentication requirement.
 
 The optional Cloudflare file contains example domains, an all-zero tunnel identifier and a placeholder credentials path. Replace them with your own values if using Cloudflare. Both example hostnames route to the **proxy** on port 7789; neither directly exposes the SDK runtime. The file only describes routing—it does not provision a tunnel or configure client authentication.

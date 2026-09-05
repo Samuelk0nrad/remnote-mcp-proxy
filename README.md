@@ -30,6 +30,10 @@ The database, built-in MCP endpoint and SDK runtime must all refer to the **same
 
 Card-label inspection is currently tied to **RemNote 1.28.0** and a specific installed worker bundle. If that version or bundle changes, label tools refuse to report native labels until the adapter is reviewed. This does not disable the SDK editing tools.
 
+## Connect to ChatGPT
+
+Follow the [ChatGPT integration guide](docs/CHATGPT.md) to configure a private tunnel, supply the proxy authentication header, discover its tools, and refresh them after updates.
+
 ## Run locally
 
 This repository provides the proxy, not a complete RemNote or SDK runtime installer.
