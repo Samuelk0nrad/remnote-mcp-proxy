@@ -26,7 +26,14 @@ async function call(name,args){
 const created=new Set();
 async function create(markdown){
  const result=await runtime('remnote_rem',{operation:'create_single_markdown',markdown:`[MCP-TEST] ${markdown}`});
- const id=result.rem?.remId;if(!id)throw new Error('No synthetic Rem ID');created.add(id);return id;
+ const id=result.rem?.remId;if(!id)throw new Error('No synthetic Rem ID');created.add(id);
+ if(/>>|<<|<>/.test(markdown)){
+  let ready=false;
+  for(let i=0;i<30;i++){const cards=await runtime('remnote_rem',{operation:'cards',remId:id});if(cards.cards?.length){ready=true;break;}await new Promise(resolve=>setTimeout(resolve,100));}
+  if(!ready)throw new Error('Temporary practice card was not generated.');
+  await new Promise(resolve=>setTimeout(resolve,300));
+ }
+ return id;
 }
 async function remove(id){const before=await call('read_flashcard',{rem_id:id});await call('delete_rem',{rem_id:id,expected_revision:before.revision,allow_descendants:true});created.delete(id);}
 const results={};
