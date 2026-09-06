@@ -11,6 +11,7 @@ function fixture() {
  const faults={};
  const run=async(_,args)=>{
   const {operation,remId}=args;const rem=rems.get(remId),state=states.get(remId);
+  if(operation==='image')return {richText:[{i:'i',url:args.url,...(args.width?{width:args.width}:{}),...(args.height?{height:args.height}:{})}]};
   if(operation==='get')return {rem:rem?structuredClone(rem):null};
   if(operation==='state')return structuredClone(state);
   if(operation==='cards'){
@@ -88,3 +89,14 @@ test('journal survives restart and stores no note text',async t=>{
   const stored=journal.db.prepare('SELECT record FROM requests').get().record;assert.ok(!stored.includes(basic.front));assert.ok(!stored.includes(basic.back));
  }finally{journal.close();}
 });
+
+test('creates hosted and reused images on basic sides and multiline answers with retry safety',async()=>{
+ const f=fixture();try{
+ const images=[{url:'https://example.com/a.png',width:32,height:32}];
+ const r=await f.service.create(args({cards:[{...basic,front_images:images,back_images:images},{type:'multiline',front:'Steps',back:{items:[{text:'One',images}]}}]}));assert.equal(r.verified,true,r.message);
+ assert.equal(f.rems.get(r.cards[0].rem_id).text[1].url,images[0].url);assert.equal(f.rems.get(r.cards[0].rem_id).backText[1].i,'i');assert.equal(f.rems.get(r.cards[1].answer_item_rem_ids[0]).text[1].i,'i');
+ const {imageEntries}=await import('../src/images.mjs');const source=r.cards[0].rem_id,image_id=imageEntries(f.rems.get(source).text,source,'front')[0].image_id;
+ const request=args({request_id:'copy-image-123',cards:[{...basic,back_images:[{source_rem_id:source,image_id}]}]});const copy=await f.service.create(request);assert.equal(copy.verified,true,copy.message);const writes=f.writes();assert.equal((await f.service.create(request)).replayed,true);assert.equal(f.writes(),writes);
+ }finally{f.journal.close();}
+});
+test('invalid image inputs fail before allocating any Rems',async()=>{const f=fixture();try{for(const images of [[{url:'http://example.com/a.png'}],[{url:'https://127.0.0.1/a.png'}],[{url:'file:///etc/passwd'}],[{url:'https://example.com/a.png',width:-1}]])await assert.rejects(()=>f.service.create(args({cards:[{...basic,front_images:images}]})));assert.equal(f.writes(),0);}finally{f.journal.close();}});

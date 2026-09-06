@@ -1,3 +1,4 @@
+import {imageEntries} from './images.mjs';
 import {createHash} from 'node:crypto';
 import {plainText,strictArgs} from './flashcards.mjs';
 import {cardLabels,readLeechThreshold,STATUS_ADAPTER} from './card-status.mjs';
@@ -7,15 +8,15 @@ import {timingAccumulator,timingProperties,validateTiming,timingSemantics} from 
 const types=['basic','multiline','multiple_choice','other'];
 const directions=['forward','backward','both','none','unknown'];
 const labels=['leech','struggling','disabled','enabled','edit_later','new','not_yet_learned','stale'];
-const numericFields=['review_count','again_count','hard_count','good_count','easy_count','again_share','hard_share','good_share','easy_share','recorded_review_seconds','median_review_seconds','recorded_reveal_seconds','median_reveal_seconds','timed_reviews','reveal_timed_reviews','filtered_review_seconds','filtered_median_review_seconds','filtered_reveal_seconds','filtered_median_reveal_seconds','practice_card_count'];
+const numericFields=['image_count','review_count','again_count','hard_count','good_count','easy_count','again_share','hard_share','good_share','easy_share','recorded_review_seconds','median_review_seconds','recorded_reveal_seconds','median_reveal_seconds','timed_reviews','reveal_timed_reviews','filtered_review_seconds','filtered_median_review_seconds','filtered_reveal_seconds','filtered_median_reveal_seconds','practice_card_count'];
 const dateFields=['created_at','updated_at','last_review_at','next_review_at'];
 const sortFields=['front','type','direction',...dateFields,...numericFields];
 const strings=(values,max=20)=>({type:'array',minItems:1,maxItems:max,uniqueItems:true,items:{type:'string',enum:values}});
 const range={type:'object',additionalProperties:false,properties:{min:{type:'number',minimum:0},max:{type:'number',minimum:0}},minProperties:1};
 const dateRange={type:'object',additionalProperties:false,properties:{min:{type:'string',format:'date-time'},max:{type:'string',format:'date-time'}},minProperties:1,description:'Inclusive ISO timestamps with explicit timezone. Unknown dates never match.'};
-const filterProperties={types:strings(types),directions:strings(directions),enabled:{type:'boolean',description:'True means at least one included practice card is enabled; false means none. Does not account for deck pausing.'},labels_any:strings(labels),labels_all:strings(labels),...Object.fromEntries(numericFields.map(k=>[k,range])),...Object.fromEntries(dateFields.map(k=>[k,dateRange]))};
+const filterProperties={has_images:{type:'boolean',description:'Images on stored front/back and marked answer items; excludes unmarked context notes and occlusion masks.'},types:strings(types),directions:strings(directions),enabled:{type:'boolean',description:'True means at least one included practice card is enabled; false means none. Does not account for deck pausing.'},labels_any:strings(labels),labels_all:strings(labels),...Object.fromEntries(numericFields.map(k=>[k,range])),...Object.fromEntries(dateFields.map(k=>[k,dateRange]))};
 export const LIST_FLASHCARD_TOOL={
- name:'list_flashcards',description:'Read-only search, filter and rank flashcards across a knowledge base or topic outline, including question/answer content and marked child answers. One result per question Rem, with practice-card directions grouped underneath and statistics summed across included practice cards. Filters combine with AND; arrays within a field use OR, except labels_all. Sort across ALL matches before cursor pagination. Supports content/type/direction/state/labels, dates, review counts/rating shares and separate response/reveal timing. Missing metrics are null, sort last and do not match numeric ranges. Default period is all retained history; retired rows excluded unless include_retired=true. Database snapshot only: read_flashcard supplies a fresh SDK revision before edits. Other/unsupported structures remain visible as type other. No writes.',
+ name:'list_flashcards',description:'Read-only search, filter and rank flashcards across a knowledge base or topic outline, including question/answer content and marked child answers. One result per question Rem, with practice-card directions grouped underneath and statistics summed across included practice cards. Filters combine with AND; arrays within a field use OR, except labels_all. Sort across ALL matches before cursor pagination. Supports has_images/image_count, content/type/direction/state/labels, dates, review counts/rating shares and separate response/reveal timing. Missing metrics are null, sort last and do not match numeric ranges. Default period is all retained history; retired rows excluded unless include_retired=true. Database snapshot only: read_flashcard supplies a fresh SDK revision before edits. Other/unsupported structures remain visible as type other. No writes.',
  inputSchema:{type:'object',additionalProperties:false,properties:{
   root_rem_id:{type:'string',pattern:'^[A-Za-z0-9_-]{3,128}$',description:'Exact topic or heading Rem ID. Omit to search the knowledge base. Parent links only; no portal/tag expansion.'},
   include_descendants:{type:'boolean',default:true,description:'False limits scope to the root and its direct children; true includes the full outline.'},
@@ -49,6 +50,7 @@ function validate(args){
  if(args.filters!==undefined){
   strictArgs(args.filters,Object.keys(filterProperties));
   for(const [key,values]of [['types',types],['directions',directions],['labels_any',labels],['labels_all',labels]])if(args.filters[key]!==undefined)choices(args.filters[key],values);
+  if(args.filters.has_images!==undefined&&typeof args.filters.has_images!=='boolean')throw new TypeError('has_images must be boolean.');
   if(args.filters.enabled!==undefined&&typeof args.filters.enabled!=='boolean')throw new TypeError('enabled must be boolean.');
   for(const key of [...numericFields,...dateFields])if(args.filters[key]!==undefined){
    const value=args.filters[key];strictArgs(value,['min','max']);if(!Object.keys(value).length)throw new TypeError('Empty range.');
@@ -65,16 +67,17 @@ function validate(args){
 }
 function metrics(count,timing){return {review_count:count.graded_reviews,...Object.fromEntries(['again','hard','good','easy'].flatMap(k=>[[`${k}_count`,count[k]],[`${k}_share`,count.graded_reviews?count[k]/count.graded_reviews:null]])),recorded_review_seconds:timing.unfiltered.recorded_seconds,median_review_seconds:timing.unfiltered.median_seconds,recorded_reveal_seconds:timing.reveal.unfiltered.recorded_seconds,median_reveal_seconds:timing.reveal.unfiltered.median_seconds,timed_reviews:timing.unfiltered.samples,reveal_timed_reviews:timing.reveal.unfiltered.samples,filtered_review_seconds:timing.filtered?.recorded_seconds??null,filtered_median_review_seconds:timing.filtered?.median_seconds??null,filtered_reveal_seconds:timing.reveal.filtered?.recorded_seconds??null,filtered_median_reveal_seconds:timing.reveal.filtered?.median_seconds??null};}
 function content(rem,children){
- let visited=0;
+ let visited=0,imageCount=imageEntries(rem.key,rem._id,'front').length+imageEntries(rem.value,rem._id,'back').length;
  const seen=new Set([rem._id]);
  function answers(id,depth){
   if(depth>16)throw new Error('Answer tree exceeds safe depth; narrow or inspect it separately.');
   return (children.get(id)??[]).filter(child=>power(child,'w')).map(child=>{
    if(seen.has(child._id)||++visited>1000)throw new Error('Cyclic or excessive marked-answer tree.');seen.add(child._id);
+   imageCount+=imageEntries(child.key,child._id,'front').length+imageEntries(child.value,child._id,'back').length;
    return {rem_id:child._id,text:text(child.key),back:text(child.value),children:answers(child._id,depth+1)};
   });
  }
- return {front:text(rem.key),back:text(rem.value),answer_items:answers(rem._id,0)};
+ const answer_items=answers(rem._id,0);return {front:text(rem.key),back:text(rem.value),answer_items,image_count:imageCount};
 }
 function answerText(items){return items.map(item=>[item.text,item.back,answerText(item.children)].join('\n')).join('\n');}
 function projectContent(full,limit){
@@ -87,6 +90,7 @@ function projectContent(full,limit){
 }
 function match(item,args){
  const filters=args.filters??{};
+ if(filters.has_images!==undefined&&filters.has_images!==item.has_images)return false;
  if(filters.types&&!filters.types.includes(item.type)||filters.directions&&!filters.directions.includes(item.direction)||filters.enabled!==undefined&&filters.enabled!==item.enabled)return false;
  if(filters.labels_any&&!filters.labels_any.some(k=>item.labels[k]))return false;
  if(filters.labels_all&&!filters.labels_all.every(k=>item.labels[k]))return false;
@@ -144,7 +148,7 @@ export function createFlashcardListing(repository,verifyAdapter){
     const direction=cards.some(c=>!['f','b'].includes(c.c))?'unknown':bool(rem.efc)?bool(rem.enableBackSR)?'backward':'none':bool(rem.enableBackSR)?'both':'forward';
     const location=[];let ancestor=rem.parent;const seen=new Set([id]);
     while(ancestor&&rems.has(ancestor)){if(seen.has(ancestor)||location.length>=100)throw new Error('Cyclic or excessive outline ancestry.');seen.add(ancestor);const parent=rems.get(ancestor);location.unshift({rem_id:ancestor,title:text(parent.key).slice(0,500)});ancestor=parent.parent;}
-    const item={rem_id:id,parent_rem_id:rem.parent??null,type:kind,direction,enabled:practice.some(c=>c.enabled),enabled_all:practice.every(c=>c.enabled),labels:Object.fromEntries(labels.map(k=>[k,practice.some(c=>c.labels[k]===true)?true:practice.some(c=>c.labels[k]===null)?null:false])),created_at:iso(timestamp(rem.createdAt)),updated_at:iso(timestamp(rem.u)),last_review_at:iso(last),next_review_at:iso(next),metrics:{...metrics(counts,timing),practice_card_count:practice.length},review_events:counts,timing,invalid_history_events:bad,practice_cards:practice,location,content:full};
+    const item={rem_id:id,has_images:full.image_count>0,image_count:full.image_count,parent_rem_id:rem.parent??null,type:kind,direction,enabled:practice.some(c=>c.enabled),enabled_all:practice.every(c=>c.enabled),labels:Object.fromEntries(labels.map(k=>[k,practice.some(c=>c.labels[k]===true)?true:practice.some(c=>c.labels[k]===null)?null:false])),created_at:iso(timestamp(rem.createdAt)),updated_at:iso(timestamp(rem.u)),last_review_at:iso(last),next_review_at:iso(next),metrics:{...metrics(counts,timing),image_count:full.image_count,practice_card_count:practice.length},review_events:counts,timing,invalid_history_events:bad,practice_cards:practice,location,content:full};
     if(match(item,args))items.push(item);
    }
    const sort=args.sort??[{field:'front',order:'asc'}];

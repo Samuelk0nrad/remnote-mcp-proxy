@@ -1,3 +1,4 @@
+import {snapshotImages,imageChangesSchema,applyImageChanges} from './images.mjs';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 const MAX_TEXT_LENGTH = 50_000;
@@ -7,18 +8,18 @@ const richSchema = { type: 'array', maxItems: 10000, items: { anyOf: [{ type: 's
 const plainSchema = { type: 'string', maxLength: MAX_TEXT_LENGTH, description: 'Literal text for this side only. Arrows are content, never front/back delimiters. For a formatted side use its rich-text field.' };
 const tool = (name, description, properties, required, readOnly = false) => ({
   name, description, inputSchema: { type: 'object', additionalProperties: false, properties, required },
-  annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: false },
+  annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: name==='update_flashcard' },
 });
 export const FLASHCARD_TOOLS = [
-  tool('read_flashcard', 'Read a Rem through the live SDK before editing or deleting. Returns separate stored front/back, marked child answer items, rich text, practice direction, card IDs, child IDs and a revision. An empty inline back does not mean a blank practice answer. Stored sides are not swapped for backward practice. Also supports ordinary Rems and documents for inspection.', { rem_id: idSchema }, ['rem_id'], true),
-  tool('update_flashcard', 'Update an existing basic or multiline card using the same type/direction/front/back/notes fields as creation. Read first and copy expected_revision. Type identifies the existing layout; type conversion is refused. Omitted fields are preserved. Basic back is literal text; multiline back.items reuses existing child IDs, supports explicit rem_id and appends new items. Deleting answer/context leaves requires delete_item_rem_ids/delete_note_rem_ids; omission never silently deletes. Typed updates require request_id for durable retry protection. Formatted text must preserve rich structure. Preserves spaced repetition; no reset option. Verifies content, direction and retained card identity/history/schedule, then returns an Edit Later verification token. Legacy basic front/back updates remain compatible.', {
+  tool('read_flashcard', 'Read a Rem through the live SDK before editing or deleting. Returns separate stored front/back, marked child answer items, rich text, practice direction, card IDs, child IDs and a revision. An empty inline back does not mean a blank practice answer. Stored sides are not swapped for backward practice. Returns image IDs, locations and metadata in images; use get_flashcard_image for pixels. Also supports ordinary Rems and documents for inspection.', { rem_id: idSchema }, ['rem_id'], true),
+  tool('update_flashcard', 'Update an existing basic or multiline card using the same type/direction/front/back/notes fields as creation. Read first and copy expected_revision. Type identifies the existing layout; type conversion is refused. Omitted fields are preserved. Basic back is literal text; multiline back.items reuses existing child IDs, supports explicit rem_id and appends new items. Deleting answer/context leaves requires delete_item_rem_ids/delete_note_rem_ids; omission never silently deletes. Typed updates require request_id for durable retry protection. image_changes explicitly adds, replaces or removes images on question sides or direct answer fronts. Other formatted text must preserve rich structure. Preserves spaced repetition; no reset option. Verifies content, direction and retained card identity/history/schedule, then returns an Edit Later verification token. Legacy basic front/back updates remain compatible.', {
     rem_id: idSchema, expected_revision: revisionSchema, type: {type:'string',enum:['basic','multiline']}, direction:{type:'string',enum:['forward','backward','both'],description:'Omit to preserve current practice direction.'},
     request_id:{type:'string',pattern:'^[A-Za-z0-9_-]{8,128}$',description:'Required for typed, direction, multiline or notes updates. Reuse the same key and arguments after timeouts.'},
     front: plainSchema, back: {anyOf:[plainSchema,{type:'object',additionalProperties:false,properties:{items:{type:'array',minItems:1,maxItems:20,items:{type:'object',additionalProperties:false,properties:{rem_id:idSchema,text:plainSchema,rich_text:richSchema},description:'Supply text or rich_text. Without any item IDs, existing surviving items are reused in order and extra entries are new. When any ID is supplied, entries without IDs create new items.'}}},required:['items']}]},
     notes:{type:'array',maxItems:10,items:plainSchema,description:'Replacement plain context/source texts. Existing surviving notes are reused in order. Omit to preserve all context. Rich notes cannot be flattened.'},
     delete_item_rem_ids:{type:'array',maxItems:20,uniqueItems:true,items:idSchema,description:'Explicit answer-item leaf IDs to delete. Requires the complete replacement back.items list. Independent cards or non-leaf items cannot be deleted here.'},
     delete_note_rem_ids:{type:'array',maxItems:10,uniqueItems:true,items:idSchema,description:'Explicit plain context leaf IDs to delete. Requires notes. Independent cards and non-leaf context cannot be deleted here.'},
-    front_rich_text: richSchema, back_rich_text: richSchema,
+    front_rich_text: richSchema, back_rich_text: richSchema, image_changes:imageChangesSchema,
   }, ['rem_id', 'expected_revision']),
   tool('update_rem_front', 'Replace only the stored front/text of a Rem. Read first and copy expected_revision. Back and card direction are preserved. For flashcard answers use update_flashcard with back. Plain text does not parse Markdown or card separators.', {
     rem_id: idSchema, expected_revision: revisionSchema, front: plainSchema, front_rich_text: richSchema,
@@ -162,7 +163,7 @@ export function createFlashcardService(run, repository, tokenSecret, { getJourna
     const check = (await remCall('get', remId))?.rem;
     if (!equal(rem, check)) throw new Error('Rem changed while reading; call read_flashcard again.');
     if (checkQueue && queueVersion(remId) !== queueRevision) throw new Error('Edit Later feedback changed while reading; call read_flashcard again.');
-    return { ...snapshot, front: plainText(rem.text), back: plainText(rem.backText),
+    return { ...snapshot, images:snapshotImages(snapshot), front: plainText(rem.text), back: plainText(rem.backText),
       answer_inspection: { source:childAnswer === null ? 'not_inspected' : answerItems.length ? (plainText(rem.backText).trim() ? 'inline_and_child_items' : 'child_items') : (plainText(rem.backText).trim() ? 'inline_back' : 'no_inline_or_marked_child_answer'), inspected:childAnswer !== null, rendering_verified:false, note:'Marked child items can supply the answer even when back is empty. Ordinary unmarked children are not assumed to be answer items. This is stored structure, not a rendered practice preview; extra detail, hidden content and other rendering rules may affect the screen.' },
       edit_later: { queued: queue !== null, queue_revision: queueRevision, feedback_rich_text: queue?.feedback_rich_text ?? [], added_at: queue?.added_at ?? null },
       practice_direction: state.practiceDirection ?? null,
@@ -195,7 +196,7 @@ export function createFlashcardService(run, repository, tokenSecret, { getJourna
     return payload;
   }
   async function update(args, kind) {
-    if(kind==='flashcard' && (['type','direction','notes','delete_item_rem_ids','delete_note_rem_ids','request_id'].some(k=>Object.hasOwn(args,k)) || (args.back && typeof args.back==='object')))return updateTyped(args);
+    if(kind==='flashcard' && (['type','direction','notes','delete_item_rem_ids','delete_note_rem_ids','request_id','image_changes'].some(k=>Object.hasOwn(args,k)) || (args.back && typeof args.back==='object')))return updateTyped(args);
     const allowed = kind === 'flashcard' ? ['rem_id', 'expected_revision', 'front', 'back', 'front_rich_text', 'back_rich_text'] : ['rem_id', 'expected_revision', 'front', 'front_rich_text'];
     strictArgs(args, allowed, ['rem_id', 'expected_revision']);
     id(args.rem_id); expectedRevision(args.expected_revision);
@@ -238,12 +239,12 @@ export function createFlashcardService(run, repository, tokenSecret, { getJourna
     });
   }
   async function updateTyped(args) {
-    strictArgs(args, ['rem_id','expected_revision','type','direction','front','back','front_rich_text','back_rich_text','notes','delete_item_rem_ids','delete_note_rem_ids','request_id'], ['rem_id','expected_revision','request_id']);
+    strictArgs(args, ['rem_id','expected_revision','type','direction','front','back','front_rich_text','back_rich_text','notes','delete_item_rem_ids','delete_note_rem_ids','request_id','image_changes'], ['rem_id','expected_revision','request_id']);
     id(args.rem_id);expectedRevision(args.expected_revision);
     if(typeof args.request_id!=='string'||!/^[A-Za-z0-9_-]{8,128}$/.test(args.request_id))throw new TypeError('Typed updates require a unique request_id; reuse it unchanged on retries.');
     if(args.type!==undefined&&!['basic','multiline'].includes(args.type))throw new TypeError('Supported update types: basic, multiline.');
     if(args.direction!==undefined&&!['forward','backward','both'].includes(args.direction))throw new TypeError('Invalid practice direction.');
-    if(!['front','back','front_rich_text','back_rich_text','notes','direction'].some(k=>Object.hasOwn(args,k)))throw new TypeError('Supply at least one explicit field to update.');
+    if(!['front','back','front_rich_text','back_rich_text','notes','direction','image_changes'].some(k=>Object.hasOwn(args,k)))throw new TypeError('Supply at least one explicit field to update.');
     if(!getJournal)throw new Error('Persistent update journal is unavailable.');
     const journal=getJournal(),key=digest(['update',args.request_id]),requestDigest=digest(args);
     return locked(args.rem_id,async()=>{
@@ -259,8 +260,8 @@ export function createFlashcardService(run, repository, tokenSecret, { getJourna
       const type=multiline?'multiline':'basic';
       if(args.type!==undefined&&args.type!==type)throw new Error('Type conversion is not supported; type must match the existing card.');
       if(multiline&&before.back.trim())throw new Error('Mixed inline and child answers require a dedicated structural edit.');
-      const front=replacement(args,'front',before.front_rich_text);
-      const back=multiline?before.back_rich_text:replacement(args,'back',before.back_rich_text);
+      const front=[...replacement(args,'front',before.front_rich_text)];
+      const back=[...(multiline?before.back_rich_text:replacement(args,'back',before.back_rich_text))];
       if(multiline&&Object.hasOwn(args,'back_rich_text'))throw new TypeError('Multiline cards use back.items, not back_rich_text.');
       if(!multiline&&Object.hasOwn(args,'delete_item_rem_ids'))throw new TypeError('Basic cards have no multiline answer items.');
       if(!plainText(front).trim()||(!multiline&&!plainText(back).trim()))throw new TypeError('Question and basic answer must not be blank.');
@@ -280,7 +281,7 @@ export function createFlashcardService(run, repository, tokenSecret, { getJourna
       }
       const deletedAnswers=deletedIds('delete_item_rem_ids','back',true),deletedNotes=deletedIds('delete_note_rem_ids','notes',false);
       const oldAnswers=direct.filter(c=>c.answer),oldNotes=direct.filter(c=>!c.answer);
-      let answers=oldAnswers.map(c=>({...c})),notes=oldNotes.map(c=>({...c}));
+      let answers=oldAnswers.map(c=>({...c,rich:[...c.rich]})),notes=oldNotes.map(c=>({...c}));
       if(multiline&&Object.hasOwn(args,'back')){
         strictArgs(args.back,['items'],['items']);
         if(!Array.isArray(args.back.items)||!args.back.items.length||args.back.items.length>20)throw new TypeError('Multiline back.items needs 1-20 answer items.');
@@ -294,7 +295,7 @@ export function createFlashcardService(run, repository, tokenSecret, { getJourna
           else if(!explicit)old=survivors[index];
           const rich=replacement(Object.hasOwn(item,'text')?{front:item.text}:{front_rich_text:item.rich_text},'front',old?.rich??[]);
           if(!plainText(rich).trim())throw new TypeError('Answer items must not be blank.');
-          return {...old,id:old?.id??null,rich,answer:true};
+          return {...old,id:old?.id??null,rich:[...rich],answer:true};
         });
         const kept=answers.filter(c=>c.id).map(c=>c.id);
         if(new Set(kept).size!==kept.length||survivors.some(c=>!kept.includes(c.id)))throw new Error('Every surviving answer item must appear exactly once. Name removed leaves in delete_item_rem_ids.');
@@ -306,8 +307,11 @@ export function createFlashcardService(run, repository, tokenSecret, { getJourna
         notes=args.notes.map((value,index)=>{const old=survivors[index],rich=replacement({front:value},'front',old?.rich??[]);if(!plainText(rich).trim())throw new TypeError('Context notes must not be blank.');return {...old,id:old?.id??null,rich,answer:false};});
       }
       for(const note of notes)if(note.rem&&!equal(note.rich,note.rem.text)&&((note.rem.backText?.length??0)>0||(repository.cardIds?.(note.id)??[]).length))throw new Error('Independent child cards must be updated through their own Rem ID and revision, not notes.');
+      await applyImageChanges(run,args.image_changes,[{id:args.rem_id,side:'front',rich:front,root:true},...(!multiline?[{id:args.rem_id,side:'back',rich:back,root:true}]:[]),...answers.filter(c=>c.id).map(c=>({id:c.id,side:'front',rich:c.rich}))]);
+      if(!plainText(front).trim()||(!multiline&&!plainText(back).trim())||answers.some(c=>!plainText(c.rich).trim()))throw new TypeError('Image removal must not leave a blank question or answer.');
+      for(const item of answers)if(item.rem&&!equal(item.rich,item.rem.text)&&((item.rem.backText?.length??0)>0||(repository.cardIds?.(item.id)??[]).length))throw new Error('Independent answer cards must be edited through their own Rem ID.');
       const planned=[...answers,...notes],newItems=planned.filter(c=>!c.id);
-      if(before.children.length+newItems.length>50||json(args).length>200000)throw new Error('Update exceeds safe child or text limits; split the work into smaller updates.');
+      if(before.children.length+newItems.length>50||json(args).length>200000||json([front,back,...planned.map(c=>c.rich)]).length>200000)throw new Error('Update exceeds safe child or text limits; split the work into smaller updates.');
       const historyIds=[...new Set([...before.cards.map(c=>c.card_id),...direct.flatMap(c=>repository.cardIds?.(c.id)??[])])];
       if(typeof repository.cardHistorySnapshot!=='function'||typeof repository.cardScheduleSnapshot!=='function')throw new Error('History/schedule verification is unavailable.');
       const history=repository.cardHistorySnapshot(historyIds),schedule=repository.cardScheduleSnapshot(historyIds,{includeActive:direction===before.practice_direction});

@@ -1,3 +1,4 @@
+import {imageArraySchema,validateImageArray,appendImages,isImage} from './images.mjs';
 import { createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
@@ -8,22 +9,22 @@ const idPattern = '^[A-Za-z0-9_-]{3,128}$';
 const idSchema = { type:'string', pattern:idPattern, description:'Exact Rem ID returned by a reader, never a practice Card ID.' };
 const textSchema = { type:'string', minLength:1, maxLength:50000, description:'Literal text. Arrows and Markdown are not parsed.' };
 const directionSchema = { type:'string', enum:['forward','backward','both'], default:'forward' };
-const itemSchema = { type:'object', additionalProperties:false, properties:{text:textSchema}, required:['text'] };
+const itemSchema = { type:'object', additionalProperties:false, properties:{text:textSchema,images:imageArraySchema}, required:['text'] };
 const cardSchema = type => ({ type:'object', additionalProperties:false, properties:{
-  type:{type:'string',const:type}, direction:directionSchema, front:textSchema,
+  type:{type:'string',const:type}, direction:directionSchema, front:textSchema, front_images:imageArraySchema, ...(type==='basic'?{back_images:imageArraySchema}:{}),
   back:type==='basic' ? textSchema : {type:'object',additionalProperties:false,properties:{items:{type:'array',minItems:1,maxItems:20,items:itemSchema}},required:['items']},
   notes:{type:'array',maxItems:10,items:textSchema,description:'Optional unmarked source/context notes; never answer items.'},
 },required:['type','front','back'] });
 export const CREATE_FLASHCARD_TOOL = {
   name:'create_flashcards',
-  description:'Create basic or multiline flashcards inside an exact document or heading. Read the topic outline first and choose parent_rem_id; do not default to the document root when a section is intended. Supports start/end or before/after a direct sibling. Separate literal front/back fields prevent separator parsing; multiline back.items become marked child answers. Both types support forward/backward/both. Verifies stored sides, child answers, direction, generated card IDs and placement. Supply a unique request_id and reuse it unchanged on retries. A completed retry returns its original receipt, not a fresh read; an interrupted request is blocked for inspection, never blindly recreated. Other card types are rejected.',
+  description:'Create basic or multiline flashcards inside an exact document or heading. Read the topic outline first and choose parent_rem_id; do not default to the document root when a section is intended. Supports start/end or before/after a direct sibling. front_images/back_images (basic) and multiline item.images append hosted or reused images after text. No file upload. Separate literal front/back fields prevent separator parsing; multiline back.items become marked child answers. Both types support forward/backward/both. Verifies stored sides, child answers, direction, generated card IDs and placement. Supply a unique request_id and reuse it unchanged on retries. A completed retry returns its original receipt, not a fresh read; an interrupted request is blocked for inspection, never blindly recreated. Other card types are rejected.',
   inputSchema:{type:'object',additionalProperties:false,properties:{
     parent_rem_id:idSchema,
     placement:{type:'object',additionalProperties:false,properties:{position:{type:'string',enum:['start','end','before','after']},sibling_rem_id:idSchema},required:['position'],description:'Defaults to end. before/after require sibling_rem_id; start/end forbid it.'},
     cards:{type:'array',minItems:1,maxItems:10,items:{oneOf:[cardSchema('basic'),cardSchema('multiline')]}},
     request_id:{type:'string',minLength:8,maxLength:128,pattern:'^[A-Za-z0-9_-]+$',description:'New UUID or unique request key. Reuse exactly the same key and arguments after timeouts; never change it to bypass an uncertain outcome.'},
   },required:['parent_rem_id','cards','request_id']},
-  annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
 };
 const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v==='object' ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])) : v;
 const json = v => JSON.stringify(canonical(v));
@@ -40,24 +41,26 @@ export function validateCreation(args) {
   if(['before','after'].includes(placement.position))validId(placement.sibling_rem_id);
   else if(Object.hasOwn(placement,'sibling_rem_id'))throw new TypeError('Only before/after accept sibling_rem_id.');
   if(!Array.isArray(args.cards)||args.cards.length<1||args.cards.length>10)throw new TypeError('Supply 1-10 cards.');
-  let remCount=0;
+  let remCount=0,imageCount=0;
   const cards=args.cards.map(card=>{
-    strictArgs(card,['type','direction','front','back','notes'],['type','front','back']);
+    strictArgs(card,['type','direction','front','back','notes','front_images','back_images'],['type','front','back']);
     if(!['basic','multiline'].includes(card.type))throw new TypeError('Supported types: basic, multiline.');
     const direction=card.direction??'forward';
     if(!['forward','backward','both'].includes(direction))throw new TypeError('Invalid card direction.');
-    validText(card.front);
+    validText(card.front);validateImageArray(card.front_images);validateImageArray(card.back_images);if(card.type==='multiline'&&card.back_images!==undefined)throw new TypeError('Multiline images belong to back.items[].images.');
     if(card.type==='basic')validText(card.back);
     else {
       strictArgs(card.back,['items'],['items']);
       if(!Array.isArray(card.back.items)||card.back.items.length<1||card.back.items.length>20)throw new TypeError('Multiline back.items requires 1-20 answer items.');
-      for(const item of card.back.items){strictArgs(item,['text'],['text']);validText(item.text);}
+      for(const item of card.back.items){strictArgs(item,['text','images'],['text']);validText(item.text);validateImageArray(item.images);}
     }
+    imageCount+=(card.front_images?.length??0)+(card.back_images?.length??0)+(card.type==='multiline'?card.back.items.reduce((n,item)=>n+(item.images?.length??0),0):0);
     const notes=card.notes??[];
     if(!Array.isArray(notes)||notes.length>10)throw new TypeError('At most 10 context notes per card.');
     notes.forEach(validText);remCount+=1+notes.length+(card.type==='multiline'?card.back.items.length:0);
     return {...card,direction,notes};
   });
+  if(imageCount>40)throw new TypeError('At most 40 images per creation batch.');
   if(remCount>60||json(cards).length>200000)throw new TypeError('Batch exceeds 60 Rems or 200000 serialized characters; split it into smaller requests.');
   return {parent_rem_id:args.parent_rem_id,placement,cards,request_id:args.request_id};
 }
@@ -116,26 +119,29 @@ export function createCardCreationService(run,getJournal,{wait=ms=>new Promise(r
       if(index<0||sibling.parentRemId!==parent.remId)throw new TypeError('Placement sibling must be a direct child of parent_rem_id.');
       if(args.placement.position==='after')index++;
     }
+    const prepared=[];for(const card of args.cards){prepared.push({front:await appendImages(run,card.front,card.front_images),back:card.type==='basic'?await appendImages(run,card.back,card.back_images):[],answers:card.type==='multiline'?await Promise.all(card.back.items.map(item=>appendImages(run,item.text,item.images))):[],notes:card.notes.map(text=>[text])});}
+    if(json(prepared).length>200000)throw new TypeError('Prepared rich content exceeds 200000 characters; split the batch.');
     const record={status:'pending',created_rem_ids:[],uncertain_creation:false};
     if(!journal.claim(key,digest,record))throw new Error('Request was claimed concurrently; retry the same request_id.');
     const roots=[];
-    async function create(text) {
+    async function create(richText) {
       // Persist uncertainty BEFORE asking the SDK to allocate an ID. A lost reply
       // cannot safely be retried, even when the created ID is unavailable.
       record.uncertain_creation=true;journal.save(key,record);
       const rem=(await call('create_rem'))?.rem;validId(rem?.remId);
       record.created_rem_ids.push(rem.remId);record.uncertain_creation=false;journal.save(key,record);
-      await write('set_text',rem.remId,{richText:[text]});
+      await write('set_text',rem.remId,{richText});
       return rem.remId;
     }
     async function verifyCard(root,card) {
+      const ready=prepared[roots.indexOf(root)];
       const rem=await get(root.id),state=await call('state',root.id);
-      if(!equal(rem.text,[card.front])||!equal(rem.children,root.children)||rem.parentRemId!==parent.remId||state.practiceDirection!==card.direction||state.enablePractice!==true||state.isCardItem!==false)throw new Error('Saved card structure or direction did not match.');
-      if(card.type==='basic'?!equal(rem.backText,[card.back]):(rem.backText?.length??0)!==0)throw new Error('Saved back did not match the selected card type.');
-      const answers=card.type==='multiline'?card.back.items.map(item=>item.text):[];
+      if(!equal(rem.text,ready.front)||!equal(rem.children,root.children)||rem.parentRemId!==parent.remId||state.practiceDirection!==card.direction||state.enablePractice!==true||state.isCardItem!==false)throw new Error('Saved card structure or direction did not match.');
+      if(card.type==='basic'?!equal(rem.backText,ready.back):(rem.backText?.length??0)!==0)throw new Error('Saved back did not match the selected card type.');
+      const answers=ready.answers;
       for(const [i,id]of root.children.entries()){
         const child=await get(id),childState=await call('state',id);
-        if(child.parentRemId!==root.id||!equal(child.text,[(answers.concat(card.notes))[i]])||child.children.length||(child.backText?.length??0)>0||childState.isCardItem!==(i<answers.length)||childState.isListItem!==false)throw new Error('Saved answer/context item did not match.');
+        if(child.parentRemId!==root.id||!equal(child.text,(answers.concat(ready.notes))[i])||child.children.length||(child.backText?.length??0)>0||childState.isCardItem!==(i<answers.length)||childState.isListItem!==false)throw new Error('Saved answer/context item did not match.');
       }
       const expected=card.direction==='both'?['backward','forward']:[card.direction];
       let cards;
@@ -145,14 +151,15 @@ export function createCardCreationService(run,getJournal,{wait=ms=>new Promise(r
         if(i===19)throw new Error('Generated practice cards did not match the requested direction; inspect before retrying.');
         await wait(100);
       }
-      return {rem_id:root.id,type:card.type,direction:card.direction,parent_rem_id:parent.remId,position:index+roots.indexOf(root),answer_item_rem_ids:root.children.slice(0,answers.length),note_rem_ids:root.children.slice(answers.length),card_ids:cards.map(c=>c.cardId)};
+      return {rem_id:root.id,type:card.type,direction:card.direction,parent_rem_id:parent.remId,position:index+roots.indexOf(root),answer_item_rem_ids:root.children.slice(0,answers.length),note_rem_ids:root.children.slice(answers.length),image_count:[...ready.front,...ready.back,...ready.answers.flat()].filter(isImage).length,card_ids:cards.map(c=>c.cardId)};
     }
     try {
-      for(const card of args.cards){
-        const root={id:await create(card.front),children:[]};roots.push(root);
-        if(card.type==='basic')await write('set_back_text',root.id,{richText:[card.back]});
-        const answers=card.type==='multiline'?card.back.items.map(item=>item.text):[];
-        for(const [i,text]of answers.concat(card.notes).entries()){
+      for(const [cardIndex,card] of args.cards.entries()){
+        const ready=prepared[cardIndex];
+        const root={id:await create(ready.front),children:[]};roots.push(root);
+        if(card.type==='basic')await write('set_back_text',root.id,{richText:ready.back});
+        const answers=ready.answers;
+        for(const [i,text]of answers.concat(ready.notes).entries()){
           const child=await create(text);root.children.push(child);
           await write('set_parent',child,{targetRemId:root.id,position:i});
           if(i<answers.length)await write('set_card_item',child,{value:true});

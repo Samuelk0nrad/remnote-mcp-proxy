@@ -12,6 +12,7 @@ function fixture(multiline=false){
  const run=async(name,args)=>{
   const {operation,remId}=args;const rem=rems.get(remId),state=states.get(remId);
   if(name==='remnote_card')return {cards:args.cardIds.map(id=>structuredClone(cards.get(id)))};
+  if(operation==='image')return {richText:[{i:'i',url:args.url,...(args.width?{width:args.width}:{}),...(args.height?{height:args.height}:{})}]};
   if(operation==='get')return {rem:structuredClone(rem??null)};
   if(operation==='state')return structuredClone(state);
   if(operation==='has_powerup')return {hasPowerup:args.powerupCode==='w'&&state.isCardItem};
@@ -54,3 +55,20 @@ test('omitted direction and no change preserve disabled direction; no correction
 
 test('direction removal allows only an empty history and reports the discarded unreviewed ID',async t=>{for(const empty of [true,false]){const f=setup(t);f.faults.removeDirection=true;f.faults.emptyHistory=empty;const r=await update(f,await f.args({direction:'backward'}));if(empty){assert.equal(r.verified,true);assert.deepEqual(r.spaced_repetition.removed_unreviewed_practice_card_ids,['question_forward']);}else{assert.equal(r.status,'needs_inspection');assert.match(r.message,/card_ids/);}}});
 test('blank sides, documents and missing typed request keys fail before writes',async t=>{const f=setup(t);for(const fields of [{front:''},{back:'  '}])await assert.rejects(async()=>update(f,await f.args(fields)),/must not be blank/);const args=await f.args({front:'X'});delete args.request_id;await assert.rejects(()=>update(f,args),/required/);f.states.get('question').isDocument=true;await assert.rejects(async()=>update(f,await f.args({front:'X'})),/Only existing/);assert.equal(f.writes(),0);});
+
+test('image add replace remove is explicit, revision guarded and preserves study state',async t=>{
+ const f=setup(t),url='https://example.com/image.png';
+ const made=await update(f,await f.args({image_changes:[{action:'add',side:'back',image:{url}}]}));assert.equal(made.verified,true);assert.equal(made.card.images.length,1);assert.equal(made.spaced_repetition.history_verified,true);assert.equal(made.spaced_repetition.schedule_verified,true);
+ const image_id=made.card.images[0].image_id;const request=await f.args({request_id:'image-replace-123',image_changes:[{action:'replace',side:'back',image_id,image:{url:'https://example.com/other.png'}}]});
+ const replaced=await update(f,request);assert.equal(replaced.verified,true);assert.notEqual(replaced.card.images[0].image_id,image_id);assert.equal((await update(f,request)).replayed,true);
+ const writes=f.writes();await assert.rejects(async()=>update(f,await f.args({request_id:'image-stale-123',image_changes:[{action:'remove',side:'back',image_id}]})),/Stale/);assert.equal(f.writes(),writes);
+ const removed=await update(f,await f.args({request_id:'image-remove-123',image_changes:[{action:'remove',side:'back',image_id:replaced.card.images[0].image_id}]}));assert.equal(removed.verified,true);assert.deepEqual(removed.card.back_rich_text,['Answer']);
+});
+test('multiline image changes retain item IDs and reject context or wrong-side targets',async t=>{
+ const f=setup(t,true);const result=await update(f,await f.args({image_changes:[{action:'add',side:'front',target_rem_id:'answerOne',image:{url:'https://example.com/a.png'}}]}));assert.equal(result.verified,true);assert.deepEqual(result.card.answer_items.map(c=>c.rem_id),['answerOne','answerTwo']);assert.equal(result.card.images[0].location,'answer_item');
+ for(const change of [{action:'remove',side:'back',image_id:result.card.images[0].image_id},{action:'add',side:'front',target_rem_id:'contextNote',image:{url:'https://example.com/a.png'}}])await assert.rejects(async()=>update(f,await f.args({request_id:'wrong-target-123',image_changes:[change]})),/destination/);
+});
+test('image operations cannot clear image-only sides or alter unrelated rich nodes',async t=>{
+ const f=setup(t);f.rems.get('question').backText=[{i:'i',url:'https://example.com/a.png'}];const read=await f.service.read('question');await assert.rejects(async()=>update(f,await f.args({image_changes:[{action:'remove',side:'back',image_id:read.images[0].image_id}]})),/blank/);assert.equal(f.writes(),0);
+ await assert.rejects(async()=>update(f,await f.args({back_rich_text:[{i:'i',url:'https://example.com/other.png'}]})),/preserve/);assert.equal(f.writes(),0);
+});

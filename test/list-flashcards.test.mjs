@@ -68,3 +68,11 @@ test('invalid history is visible and an incompatible adapter fails closed',async
  const f=fixture();t.after(()=>f.db.close());f.card('brokenCard',{rId:'betaRem',h:[event(1,10,{date:'bad'})]});const r=await f.service.list({});assert.equal(r.coverage.complete_retained_history,false);assert.equal(r.coverage.invalid_history_events,1);
  const bad=createFlashcardListing({withDatabase:cb=>cb(f.db)},async()=>{throw new Error('Adapter changed');});await assert.rejects(()=>bad.list({}),/Adapter changed/);
 });
+
+test('image counts include both sides and marked answers, exclude context, and rank before paging',async t=>{
+ const f=fixture();t.after(()=>f.db.close());const image={i:'i',url:'https://example.com/image.png'};
+ const patch=(id,fields)=>{const row=f.db.prepare('SELECT doc FROM quanta WHERE _id=?').get(id);f.db.prepare('UPDATE quanta SET doc=? WHERE _id=?').run(JSON.stringify({...JSON.parse(row.doc),...fields}),id);};
+ patch('alphaRem',{key:['Alpha',image],value:['A',image]});patch('answer1',{key:['First',image]});patch('noteRem',{key:[image]});
+ const q={root_rem_id:'rootTopic',filters:{has_images:true},sort:[{field:'image_count',order:'desc'}],limit:1,include_content:false};const r=await f.service.list(q);assert.equal(r.total,2);assert.equal(r.items[0].rem_id,'alphaRem');assert.equal(r.items[0].image_count,2);assert.equal((await f.service.list({...q,cursor:r.next_cursor})).items[0].image_count,1);
+ assert.deepEqual((await f.service.list({root_rem_id:'rootTopic',filters:{has_images:false}})).items.map(c=>c.rem_id),['betaRem']);await assert.rejects(()=>f.service.list({filters:{has_images:'yes'}}),/boolean/);
+});

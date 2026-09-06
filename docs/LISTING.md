@@ -85,3 +85,7 @@ Results include content, outline location, type/direction, labels, dates, period
 `limit` defaults to 20, maximum 50. Follow `next_cursor` with the same query; page size may change. Filters, sorting and the snapshot are bound to the cursor. A changed database or relevant setting causes an explicit restart error rather than silently duplicating/skipping ranks.
 
 Run the offline suite with `npm test`. `scripts/verify-list-flashcards.mjs` is a read-only live check: it compares grouped counts/timing with existing per-card analytics, checks ranking/pagination, and compares selected content, answer membership, direction and dates with SDK reads. It outputs only validation counts and booleans.
+
+## Images
+
+Use `filters.has_images` to include or exclude image cards. `image_count` is returned on each row and is a numeric filter and sort key. Counts cover question sides and marked child answers, excluding unmarked context. See the [image guide](IMAGES.md) for pixel retrieval and limitations.

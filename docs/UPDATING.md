@@ -2,6 +2,8 @@
 
 `update_flashcard` uses the same card content fields as `create_flashcards`: `type`, `direction`, `front`, `back`, and `notes`. It updates one existing question Rem at a time. Creation wraps these fields in `cards`; updating adds `rem_id`, `expected_revision`, and `request_id` to identify and protect the existing card.
 
+Images can be added, replaced or explicitly removed with `image_changes`; see the [image guide](IMAGES.md) for side/item targeting and source options.
+
 Read the card with `read_flashcard` first. Copy its Rem ID and revision; practice Card IDs identify review directions and are not edit targets. All omitted content fields and direction remain unchanged. A supplied `type` must match the existing layout. This release supports basic and flat multiline cards; it refuses type conversion, cloze and multiple-choice editing.
 
 ## Basic answer

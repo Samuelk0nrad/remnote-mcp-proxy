@@ -1,3 +1,4 @@
+import {GET_IMAGE_TOOL,createImageReader} from './images.mjs';
 import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
@@ -48,6 +49,7 @@ const EXTRA_TOOLS = [
     },
   },
   ...FLASHCARD_TOOLS,
+  GET_IMAGE_TOOL,
   CREATE_FLASHCARD_TOOL,
   LIST_FLASHCARD_TOOL,
   MOVE_FLASHCARD_TOOL,
@@ -344,7 +346,7 @@ export function createRuntimeMcpRunner({
     'content-type': 'application/json',
   };
 
-  return async (toolName, args) => {
+  return async (toolName, args, {raw=false}={}) => {
     const initializeResponse = await fetchImpl(runtimeUrl, {
       method: 'POST',
       signal: AbortSignal.timeout(30_000),
@@ -406,7 +408,7 @@ export function createRuntimeMcpRunner({
         const message = callBody.result.content?.find((entry) => entry.type === 'text')?.text;
         throw new Error(message ?? 'RemNote Agent Runtime tool call failed');
       }
-      return normalizeToolResult(callBody?.result);
+      return raw ? callBody?.result : normalizeToolResult(callBody?.result);
     } finally {
       await fetchImpl(runtimeUrl, {
         method: 'DELETE',
@@ -438,6 +440,7 @@ export function createMcpHandler({
     }
     return journal;
   };
+  const readImage=createImageReader(runtimeMcpRunner);
   const creation = createCardCreationService(runtimeMcpRunner, getOperationJournal);
   const flashcards = createFlashcardService(runtimeMcpRunner, repository, expectedToken, { getJournal: getOperationJournal });
   const moves = createCardMoveService(runtimeMcpRunner, flashcards, repository, getOperationJournal);
@@ -516,6 +519,7 @@ export function createMcpHandler({
           return;
         }
 
+        if(name==='get_flashcard_image'){const result=await readImage(args);response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify({jsonrpc:'2.0',id:rpcRequest.id,result}));return;}
         let payload;
         if (name === 'get_card_review_history') {
           payload = await analytics.timeline(args);

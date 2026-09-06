@@ -10,6 +10,7 @@ The proxy forwards RemNote's built-in tools and adds guarded editing and inspect
 | --- | --- | --- |
 | Move existing cards | `move_flashcards` | Exact placement with fresh revisions; preserves content, child structure, practice IDs and retained history. |
 | Search and rank cards | `list_flashcards` | One question per result, full-topic filtering/sorting, content, dates, labels, review metrics and pagination. |
+| Inspect an image | `get_flashcard_image` | Actual image pixels from a managed file or public HTTPS URL; discover image IDs with `read_flashcard`. |
 | Create cards inside a topic | `create_flashcards` | Basic or multiline, explicit placement and direction, verified SDK writes and durable retry protection. |
 | Inspect a card before editing | `read_flashcard` | Returns inline front/back, marked child answers, rich text, card IDs, direction and a revision. |
 | Change a question or answer | `update_flashcard` | Typed basic/multiline edits with separate sides, revision checks and preserved history/schedules. |
@@ -97,7 +98,9 @@ Use `move_flashcards` to relocate existing questions and their child answers/con
 
 Use the **Rem ID**, not a practice Card ID. One Rem can produce multiple practice cards, for example when both directions are enabled.
 
-Version 0.11.0 aligns updating with creation’s `type`, `direction`, `front`, `back` and `notes` fields, including multiline `back.items`. The catalog remains at 40 tools. See the [update guide](docs/UPDATING.md) for item identity, explicit removal, retries and spaced repetition.
+Version 0.12.0 adds image discovery and retrieval, creation with hosted or reused images, explicit image updates, and image filtering/count sorting. See the [image guide](docs/IMAGES.md) for supported sources, examples, limits and the live image test. There is no file-upload or image-occlusion editor in this release.
+
+Version 0.11.0 aligns updating with creation’s `type`, `direction`, `front`, `back` and `notes` fields, including multiline `back.items`. That release retains 40 tools; version 0.12.0 adds image retrieval for 41. See the [update guide](docs/UPDATING.md) for item identity, explicit removal, retries and spaced repetition.
 
 The examples below show tool arguments. Replace the placeholder ID and copy the revision and verification token from actual responses.
 
