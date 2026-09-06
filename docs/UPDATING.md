@@ -18,7 +18,7 @@ Read the card with `read_flashcard` first. Copy its Rem ID and revision; practic
 }
 ```
 
-`front` and basic `back` are separate literal strings. Arrows and Markdown do not define card sides. Questions and basic answers must remain nonblank. Use `front_rich_text` or `back_rich_text` for existing formatted sides, preserving their structured nodes, references and formatting. The older basic `front`/`back` call without typed fields or a request key remains compatible; use the typed form for the additional history/schedule checks and durable retry protection.
+`front` and basic `back` are separate text values: literal strings or explicit formatted spans. See [formatting](FORMATTING.md) to add or remove bold, italic and underline. Arrows and Markdown do not define card sides. Questions and basic answers must remain nonblank. Use `front_rich_text` or `back_rich_text` for existing formatted sides, preserving their structured nodes, references and formatting. The older basic `front`/`back` call without typed fields or a request key remains compatible; use the typed form for the additional history/schedule checks and durable retry protection.
 
 ## Multiline answer
 
@@ -45,7 +45,7 @@ Each answer item remains a marked child Rem. The inline back stays empty. Item I
 - With **no item IDs supplied**, surviving existing items are reused in order, and extra entries create children. Explicit IDs are preferable when reordering.
 - Every surviving existing answer item must appear exactly once. A shorter list never silently removes answers.
 - Removing an answer requires its ID in `delete_item_rem_ids` **and** the complete replacement `back.items` list. Only direct leaves without independent practice cards or an inline answer can be removed.
-- For formatted items, use `rich_text` instead of `text` and preserve the existing structured nodes. New items are literal text in this version.
+- For formatted items, use `rich_text` instead of `text` and preserve the existing structured nodes. New and existing items can instead use `text: {spans: [...]}` for explicit formatting; the raw `rich_text` protection remains unchanged.
 - Nested answer replacement is refused. Omitting `back` preserves the existing answer tree while allowing the question to be edited.
 
 ## Notes and placement

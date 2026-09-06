@@ -11,6 +11,7 @@ function fixture() {
  const faults={};
  const run=async(_,args)=>{
   const {operation,remId}=args;const rem=rems.get(remId),state=states.get(remId);
+  if(operation==='text')return {richText:[{i:'m',text:args.text,...Object.fromEntries((args.formats??[]).map(f=>[{bold:'b',italic:'l',underline:'u'}[f],true]))}]};
   if(operation==='image')return {richText:[{i:'i',url:args.url,...(args.width?{width:args.width}:{}),...(args.height?{height:args.height}:{})}]};
   if(operation==='get')return {rem:rem?structuredClone(rem):null};
   if(operation==='state')return structuredClone(state);
@@ -100,3 +101,5 @@ test('creates hosted and reused images on basic sides and multiline answers with
  }finally{f.journal.close();}
 });
 test('invalid image inputs fail before allocating any Rems',async()=>{const f=fixture();try{for(const images of [[{url:'http://example.com/a.png'}],[{url:'https://127.0.0.1/a.png'}],[{url:'file:///etc/passwd'}],[{url:'https://example.com/a.png',width:-1}]])await assert.rejects(()=>f.service.create(args({cards:[{...basic,front_images:images}]})));assert.equal(f.writes(),0);}finally{f.journal.close();}});
+
+test('creates formatted basic and multiline text, including notes and adjacent images',async()=>{const f=fixture();try{const text={spans:[{text:'Key',formats:['bold']},{text:' definition'}]},r=await f.service.create(args({cards:[{type:'basic',front:text,back:text,notes:[text]},{type:'multiline',front:'Steps',back:{items:[{text,images:[{url:'https://example.com/a.png'}]}]}}]}));assert.equal(r.verified,true,r.message);assert.equal(f.rems.get(r.cards[0].rem_id).text[0].b,true);assert.equal(f.rems.get(r.cards[0].note_rem_ids[0]).text[0].b,true);const item=f.rems.get(r.cards[1].answer_item_rem_ids[0]);assert.equal(item.text[0].b,true);assert.equal(item.text[2].i,'i');}finally{f.journal.close();}});

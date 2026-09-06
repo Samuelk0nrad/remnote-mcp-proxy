@@ -1,3 +1,4 @@
+import {buildContent} from './formatting.mjs';
 import {createHash} from 'node:crypto';
 import {lookup} from 'node:dns/promises';
 import https from 'node:https';
@@ -50,7 +51,7 @@ export async function buildImage(run,source){
  for(const [side,rich]of [['front',rem.text],['back',rem.backText]]){const found=imageEntries(rich,source.source_rem_id,side).find(x=>x.image_id===source.image_id);if(found){const node=rich[found.element_index];if(JSON.stringify(node).length>50000)throw new Error('Source image node is too large to copy safely.');if(typeof node.url!=='string'||!node.url.startsWith('%LOCAL_FILE%'))imageUrl(node.url);return structuredClone(node);}}
  throw new Error('Stale or missing source image. Read its owner Rem again.');
 }
-export async function appendImages(run,text,images){validateImageArray(images);const rich=[text];for(const source of images??[])rich.push(await buildImage(run,source));return rich;}
+export async function appendImages(run,text,images){validateImageArray(images);const rich=await buildContent(run,text);for(const source of images??[])rich.push(await buildImage(run,source));return rich;}
 export async function applyImageChanges(run,changes,targets){
  if(changes===undefined)return;
  if(!Array.isArray(changes)||!changes.length||changes.length>20)throw new TypeError('Supply 1-20 image changes.');

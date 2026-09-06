@@ -24,7 +24,7 @@ The list's `image_count` and `has_images` include the question's front/back and 
 
 ## Create cards with images
 
-Use `front_images` and, for a basic card, `back_images`. For multiline answers, use `back.items[].images`. Each list appends images after the field's literal text in the supplied order. Text must remain nonblank on creation. Source/context notes remain plain strings.
+Use `front_images` and, for a basic card, `back_images`. For multiline answers, use `back.items[].images`. Each list appends images after the field's text content in the supplied order. Text must remain nonblank on creation. Source/context notes accept plain strings or [formatted text spans](FORMATTING.md).
 
 ```json
 {

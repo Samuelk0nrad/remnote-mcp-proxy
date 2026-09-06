@@ -159,3 +159,7 @@ Proxy 0.11.0 extends `update_flashcard` without adding a tool (40 total). Refres
 ## Image support
 
 Proxy 0.12.0 adds `get_flashcard_image`, bringing the catalog to 41 tools. Refresh after deployment to load this reader plus creation image lists, `update_flashcard.image_changes` and `list_flashcards.filters.has_images`. Ask ChatGPT to find an image card, read its metadata, then call the image tool with the returned owner and image ID. A successful vision check must include actual image content; a URL or textual description alone does not establish that ChatGPT saw the pixels. See the [image guide](IMAGES.md) for examples and supported sources. File upload and image-occlusion editing remain unsupported.
+
+## Text formatting
+
+Proxy 0.13.0 adds bold/italic/underline span objects to creation and updating, including multiline items and notes. No new tools are added (41 total). Refresh the catalog, then use the content views from `read_flashcard` and preserve embedded elements explicitly. See the [formatting guide](FORMATTING.md).

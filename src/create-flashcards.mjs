@@ -1,3 +1,4 @@
+import {contentSchema,validateContent,buildContent,countSpans} from './formatting.mjs';
 import {imageArraySchema,validateImageArray,appendImages,isImage} from './images.mjs';
 import { createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
@@ -7,17 +8,17 @@ import { strictArgs } from './flashcards.mjs';
 
 const idPattern = '^[A-Za-z0-9_-]{3,128}$';
 const idSchema = { type:'string', pattern:idPattern, description:'Exact Rem ID returned by a reader, never a practice Card ID.' };
-const textSchema = { type:'string', minLength:1, maxLength:50000, description:'Literal text. Arrows and Markdown are not parsed.' };
+const textSchema = contentSchema({ type:'string', minLength:1, maxLength:50000, description:'Literal text. Arrows and Markdown are not parsed. Or use {spans:[{text,formats}]} for explicit formatting.' });
 const directionSchema = { type:'string', enum:['forward','backward','both'], default:'forward' };
 const itemSchema = { type:'object', additionalProperties:false, properties:{text:textSchema,images:imageArraySchema}, required:['text'] };
 const cardSchema = type => ({ type:'object', additionalProperties:false, properties:{
   type:{type:'string',const:type}, direction:directionSchema, front:textSchema, front_images:imageArraySchema, ...(type==='basic'?{back_images:imageArraySchema}:{}),
   back:type==='basic' ? textSchema : {type:'object',additionalProperties:false,properties:{items:{type:'array',minItems:1,maxItems:20,items:itemSchema}},required:['items']},
-  notes:{type:'array',maxItems:10,items:textSchema,description:'Optional unmarked source/context notes; never answer items.'},
+  notes:{type:'array',maxItems:10,items:textSchema,description:'Optional unmarked literal or formatted source/context notes; never answer items.'},
 },required:['type','front','back'] });
 export const CREATE_FLASHCARD_TOOL = {
   name:'create_flashcards',
-  description:'Create basic or multiline flashcards inside an exact document or heading. Read the topic outline first and choose parent_rem_id; do not default to the document root when a section is intended. Supports start/end or before/after a direct sibling. front_images/back_images (basic) and multiline item.images append hosted or reused images after text. No file upload. Separate literal front/back fields prevent separator parsing; multiline back.items become marked child answers. Both types support forward/backward/both. Verifies stored sides, child answers, direction, generated card IDs and placement. Supply a unique request_id and reuse it unchanged on retries. A completed retry returns its original receipt, not a fresh read; an interrupted request is blocked for inspection, never blindly recreated. Other card types are rejected.',
+  description:'Create basic or multiline flashcards inside an exact document or heading. Read the topic outline first and choose parent_rem_id; do not default to the document root when a section is intended. Supports start/end or before/after a direct sibling. front_images/back_images (basic) and multiline item.images append hosted or reused images after text. No file upload. Text fields accept literal strings or {spans:[{text,formats}]} with bold/italic/underline, including multiline item.text and notes. Separate front/back fields prevent separator parsing; multiline back.items become marked child answers. Both types support forward/backward/both. Verifies stored sides, child answers, direction, generated card IDs and placement. Supply a unique request_id and reuse it unchanged on retries. A completed retry returns its original receipt, not a fresh read; an interrupted request is blocked for inspection, never blindly recreated. Other card types are rejected.',
   inputSchema:{type:'object',additionalProperties:false,properties:{
     parent_rem_id:idSchema,
     placement:{type:'object',additionalProperties:false,properties:{position:{type:'string',enum:['start','end','before','after']},sibling_rem_id:idSchema},required:['position'],description:'Defaults to end. before/after require sibling_rem_id; start/end forbid it.'},
@@ -31,7 +32,7 @@ const json = v => JSON.stringify(canonical(v));
 const equal = (a,b) => json(a)===json(b);
 const hash = v => createHash('sha256').update(json(v)).digest('hex');
 function validId(v) { if(typeof v!=='string'||!new RegExp(idPattern).test(v))throw new TypeError('Use an exact Rem ID from a reader.'); }
-function validText(v) { if(typeof v!=='string'||!v.trim()||v.length>50000)throw new TypeError('Card text must be nonblank literal text of at most 50000 characters.'); }
+function validText(v) { validateContent(v); }
 export function validateCreation(args) {
   strictArgs(args,['parent_rem_id','placement','cards','request_id'],['parent_rem_id','cards','request_id']);validId(args.parent_rem_id);
   if(typeof args.request_id!=='string'||!/^[A-Za-z0-9_-]{8,128}$/.test(args.request_id))throw new TypeError('request_id must be a unique 8-128 character key.');
@@ -60,6 +61,7 @@ export function validateCreation(args) {
     notes.forEach(validText);remCount+=1+notes.length+(card.type==='multiline'?card.back.items.length:0);
     return {...card,direction,notes};
   });
+  if(countSpans(cards)>200)throw new TypeError('At most 200 formatted spans per batch.');
   if(imageCount>40)throw new TypeError('At most 40 images per creation batch.');
   if(remCount>60||json(cards).length>200000)throw new TypeError('Batch exceeds 60 Rems or 200000 serialized characters; split it into smaller requests.');
   return {parent_rem_id:args.parent_rem_id,placement,cards,request_id:args.request_id};
@@ -119,7 +121,7 @@ export function createCardCreationService(run,getJournal,{wait=ms=>new Promise(r
       if(index<0||sibling.parentRemId!==parent.remId)throw new TypeError('Placement sibling must be a direct child of parent_rem_id.');
       if(args.placement.position==='after')index++;
     }
-    const prepared=[];for(const card of args.cards){prepared.push({front:await appendImages(run,card.front,card.front_images),back:card.type==='basic'?await appendImages(run,card.back,card.back_images):[],answers:card.type==='multiline'?await Promise.all(card.back.items.map(item=>appendImages(run,item.text,item.images))):[],notes:card.notes.map(text=>[text])});}
+    const prepared=[];for(const card of args.cards){prepared.push({front:await appendImages(run,card.front,card.front_images),back:card.type==='basic'?await appendImages(run,card.back,card.back_images):[],answers:card.type==='multiline'?await Promise.all(card.back.items.map(item=>appendImages(run,item.text,item.images))):[],notes:await Promise.all(card.notes.map(text=>buildContent(run,text)))});}
     if(json(prepared).length>200000)throw new TypeError('Prepared rich content exceeds 200000 characters; split the batch.');
     const record={status:'pending',created_rem_ids:[],uncertain_creation:false};
     if(!journal.claim(key,digest,record))throw new Error('Request was claimed concurrently; retry the same request_id.');

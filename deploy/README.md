@@ -89,3 +89,7 @@ Version 0.11.0 shares that persistent journal with typed `update_flashcard` requ
 ## Image support upgrade
 
 Version 0.12.0 adds native MCP image content and a 41-tool catalog. Run `scripts/smoke-images.mjs` with the same environment as the existing live tests; it requires write access to its own synthetic fixture in the runtime's managed-media directory. It verifies pixels through the proxy as well as SDK image writes, stale/retry guards and cleanup. The [image guide](../docs/IMAGES.md) explains media roots, hosted retrieval, limits and test behavior. Preserve the prior committed deployment and operation journal, run both the image and existing regression smoke tests, then refresh the client catalog with approval.
+
+## Formatting upgrade
+
+Version 0.13.0 extends the creation/update schemas without changing the 41-tool count. Run `scripts/smoke-formatting.mjs` with the database/proxy environment and retain the existing image and card regression checks. Preserve the previous committed release and operation journal, verify the deployed schemas, and refresh the client catalog with approval. See [formatting](../docs/FORMATTING.md) for limits and fixture behavior.

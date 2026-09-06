@@ -98,6 +98,8 @@ Use `move_flashcards` to relocate existing questions and their child answers/con
 
 Use the **Rem ID**, not a practice Card ID. One Rem can produce multiple practice cards, for example when both directions are enabled.
 
+Version 0.13.0 adds explicit bold, italic and underline text spans to creation and updating, including multiline answers and notes. The catalog remains at 41 tools. See the [formatting guide](docs/FORMATTING.md) for examples and preservation of embedded content.
+
 Version 0.12.0 adds image discovery and retrieval, creation with hosted or reused images, explicit image updates, and image filtering/count sorting. See the [image guide](docs/IMAGES.md) for supported sources, examples, limits and the live image test. There is no file-upload or image-occlusion editor in this release.
 
 Version 0.11.0 aligns updating with creation’s `type`, `direction`, `front`, `back` and `notes` fields, including multiline `back.items`. That release retains 40 tools; version 0.12.0 adds image retrieval for 41. See the [update guide](docs/UPDATING.md) for item identity, explicit removal, retries and spaced repetition.
